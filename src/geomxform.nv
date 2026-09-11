@@ -1,0 +1,407 @@
+// geomxform.nv — 2-D affine transforms: translate, scale, rotate,
+// compose, apply, invert.
+//
+// SIX NUMBERS, NOT NINE.  An affine transform in the plane is a 3x3
+// matrix whose bottom row is always `[0 0 1]`, so storing that row
+// stores a constant three times and invites a caller to set it to
+// something else.  `GeomXform` is the six that vary, in the order every
+// other library names them — SVG's `matrix(a b c d e f)`, PostScript's
+// six-element array, Cairo's `cairo_matrix_t`, euclid's
+// `Transform2D` — so a transform read out of an SVG file is six
+// consecutive numbers with no reshuffling, and one written back is too.
+//
+// ROW-VECTOR CONVENTION, which is the one that matters for `compose`.
+// A point is a row `[x y 1]` multiplied on the LEFT of the matrix, so
+// `compose(first, second)` applies `first` and then `second` — reading
+// left to right, in the order the operations happen.  The column-vector
+// convention linear algebra teaches would make the same call mean
+// "second, then first", which is correct and reads backwards.  The
+// parameter names are the documentation: there is no second spelling of
+// this function, because two names for one operation is how a caller
+// ends up sure of the order and wrong about it.
+//
+// NO EFFECTS.
+
+use geompoint
+use geomrect
+
+// An affine transform of the plane.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     let t = geomxform.scaling(2.0, 2.0)
+//     println("${t.a}")
+// ```
+pub @value
+struct GeomXform
+    // Row 0, column 0: how much of the input x reaches the output x.
+    a: Float
+    // Row 0, column 1: how much of the input x reaches the output y.
+    b: Float
+    // Row 1, column 0: how much of the input y reaches the output x.
+    c: Float
+    // Row 1, column 1: how much of the input y reaches the output y.
+    d: Float
+    // The translation along x, applied after the linear part.
+    e: Float
+    // The translation along y.
+    f: Float
+
+// The transform that changes nothing.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.is_identity(geomxform.identity())}")
+// ```
+pub fn identity() -> GeomXform
+    todo("geometry-nv.geomxform.identity")
+
+// A transform from the six numbers, in SVG's `matrix(a b c d e f)`
+// order.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.of_matrix(1.0, 0.0, 0.0, 1.0, 5.0, 0.0).e}")
+// ```
+pub fn of_matrix(a: Float, b: Float, c: Float, d: Float, e: Float, f: Float) -> GeomXform
+    todo("geometry-nv.geomxform.of_matrix")
+
+// A pure translation.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.translation(5.0, 0.0)
+//     println("${geomxform.apply_point(t, geompoint.origin()).x}")
+// ```
+pub fn translation(tx: Float, ty: Float) -> GeomXform
+    todo("geometry-nv.geomxform.translation")
+
+// A pure scale about the origin.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.scaling(2.0, 3.0)
+//     println("${geomxform.apply_point(t, geompoint.ptf(1.0, 1.0)).y}")
+// ```
+pub fn scaling(sx: Float, sy: Float) -> GeomXform
+    todo("geometry-nv.geomxform.scaling")
+
+// A rotation about the origin, by `radians`, from positive x toward
+// positive y.
+//
+// RADIANS, and the direction is stated rather than named: whether that
+// looks clockwise or anticlockwise depends on which way the caller's y
+// points, and this package does not know (see `GeomPointF.y`).  On a
+// screen it looks clockwise; on a plot it looks anticlockwise; it is
+// the same rotation.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.rotation(0.0).a}")
+// ```
+pub fn rotation(radians: Float) -> GeomXform
+    todo("geometry-nv.geomxform.rotation")
+
+// A rotation about a named point rather than the origin.
+//
+// Written out because the three-transform sandwich — translate to the
+// origin, rotate, translate back — is the composition callers get
+// backwards most often.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.rotation_about(0.0, geompoint.ptf(5.0, 5.0))
+//     println("${geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)).x}")
+// ```
+pub fn rotation_about(radians: Float, pivot: GeomPointF) -> GeomXform
+    todo("geometry-nv.geomxform.rotation_about")
+
+// A scale about a named point.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.scaling_about(2.0, 2.0, geompoint.ptf(5.0, 5.0))
+//     println("${geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)).x}")
+// ```
+pub fn scaling_about(sx: Float, sy: Float, pivot: GeomPointF) -> GeomXform
+    todo("geometry-nv.geomxform.scaling_about")
+
+// A shear: x displaced in proportion to y, and y in proportion to x.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.shear(1.0, 0.0).c}")
+// ```
+pub fn shear(shx: Float, shy: Float) -> GeomXform
+    todo("geometry-nv.geomxform.shear")
+
+// The transform that maps `from` onto `to`, axis by axis.
+//
+// The one a plot is built out of: data space in, pixel space out, and
+// flipping y falls out of it because a `to` whose y runs the other way
+// produces a negative `d`.  An empty `from` has no extent to map and
+// answers the identity.
+//
+// ```novo
+// use geomxform
+// use geomrect
+//
+// fn main() [io]
+//     let src = geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)
+//     let dst = geomrect.of_xywh(0.0, 100.0, 200.0, 0.0 - 100.0)
+//     println("${geomxform.mapping(src, dst).d}")
+// ```
+pub fn mapping(from: GeomRectF, to: GeomRectF) -> GeomXform
+    todo("geometry-nv.geomxform.mapping")
+
+// The transform that applies `first` and then `second`.
+//
+// Reading order: the argument written first happens first.  That is the
+// row-vector convention this package uses throughout, and the reason
+// the header spends a paragraph on it.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.compose(geomxform.scaling(2.0, 2.0), geomxform.translation(1.0, 0.0))
+//     println("${geomxform.apply_point(t, geompoint.ptf(1.0, 0.0)).x}")
+// ```
+pub fn compose(first: GeomXform, second: GeomXform) -> GeomXform
+    todo("geometry-nv.geomxform.compose")
+
+// The same transform with a translation applied after it.
+//
+// The accumulating form, for a caller walking a tree of nested groups.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.translated(geomxform.identity(), 5.0, 0.0).e}")
+// ```
+pub fn translated(t: GeomXform, tx: Float, ty: Float) -> GeomXform
+    todo("geometry-nv.geomxform.translated")
+
+// The same transform with a scale applied after it.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.scaled(geomxform.identity(), 2.0, 2.0).a}")
+// ```
+pub fn scaled(t: GeomXform, sx: Float, sy: Float) -> GeomXform
+    todo("geometry-nv.geomxform.scaled")
+
+// The same transform with a rotation applied after it.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.rotated(geomxform.identity(), 0.0).a}")
+// ```
+pub fn rotated(t: GeomXform, radians: Float) -> GeomXform
+    todo("geometry-nv.geomxform.rotated")
+
+// Where `t` sends the point `p`.  The translation applies.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.translation(5.0, 0.0)
+//     println("${geomxform.apply_point(t, geompoint.ptf(1.0, 0.0)).x}")
+// ```
+pub fn apply_point(t: GeomXform, p: GeomPointF) -> GeomPointF
+    todo("geometry-nv.geomxform.apply_point")
+
+// Where `t` sends the displacement `v`.  THE TRANSLATION DOES NOT
+// APPLY.
+//
+// A displacement is the difference of two positions, and moving both of
+// them moves the difference not at all.  This is the reason
+// `GeomVecF` is a separate type from `GeomPointF`: transforming a
+// direction, a normal or an edge through `apply_point` adds a
+// translation that should not be there, and the bug is silent — it
+// shows up only once the transform stops being a pure rotation.
+//
+// ```novo
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomxform.translation(5.0, 0.0)
+//     println("${geomxform.apply_vec(t, geompoint.vecf(1.0, 0.0)).dx}")
+// ```
+pub fn apply_vec(t: GeomXform, v: GeomVecF) -> GeomVecF
+    todo("geometry-nv.geomxform.apply_vec")
+
+// The smallest axis-aligned rectangle containing the transformed
+// rectangle.
+//
+// A rotated rectangle is not a rectangle, so this is the BOUNDING BOX
+// of its four transformed corners — larger than the original under any
+// rotation that is not a multiple of a quarter turn.  A caller that
+// needs the actual quadrilateral transforms `geomrect.corners` instead,
+// and a caller that chains this twice loses area both times.
+//
+// ```novo
+// use geomxform
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.width(geomxform.apply_rect(geomxform.scaling(2.0, 2.0), r))}")
+// ```
+pub fn apply_rect(t: GeomXform, r: GeomRectF) -> GeomRectF
+    todo("geometry-nv.geomxform.apply_rect")
+
+// Every point in the list, transformed.
+//
+// ```novo
+// use geomxform
+// use geompoint
+// use std.list
+//
+// fn main() [io]
+//     let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 1.0)]
+//     println("${list.len(geomxform.apply_points(geomxform.identity(), ps))}")
+// ```
+pub fn apply_points(t: GeomXform, points: [GeomPointF]) -> [GeomPointF]
+    todo("geometry-nv.geomxform.apply_points")
+
+// `a * d - b * c`: how much the transform multiplies area by.
+//
+// Zero means the transform flattens the plane onto a line and has no
+// inverse; negative means it mirrors.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.determinant(geomxform.scaling(2.0, 3.0))}")
+// ```
+pub fn determinant(t: GeomXform) -> Float
+    todo("geometry-nv.geomxform.determinant")
+
+// Whether the transform can be undone: its determinant is far enough
+// from zero to invert without losing the answer to rounding.
+//
+// ASK THIS BEFORE `invert`, which cannot report a failure — a `@value`
+// struct is not allowed in a `Result` payload (SPEC §14.5), so the pair
+// is a predicate and a total function rather than one fallible call.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.is_invertible(geomxform.scaling(0.0, 1.0))}")
+// ```
+pub fn is_invertible(t: GeomXform) -> Bool
+    todo("geometry-nv.geomxform.is_invertible")
+
+// The transform that undoes `t`, or the IDENTITY if there is none.
+//
+// The identity is the safe wrong answer rather than a NaN-filled
+// transform: a caller who skipped `is_invertible` gets untransformed
+// coordinates, which look wrong on screen, instead of a matrix that
+// turns every later point into a NaN and shows nothing at all.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.invert(geomxform.scaling(2.0, 2.0)).a}")
+// ```
+pub fn invert(t: GeomXform) -> GeomXform
+    todo("geometry-nv.geomxform.invert")
+
+// Whether `t` changes nothing, to within `eps` on every entry.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.is_identity(geomxform.identity())}")
+// ```
+pub fn is_identity(t: GeomXform) -> Bool
+    todo("geometry-nv.geomxform.is_identity")
+
+// Whether `t` is a translation and nothing else.
+//
+// The case worth testing for: a translation-only transform lets a
+// renderer add two numbers per point instead of doing four
+// multiplications, and a whole-number translation lets it skip
+// resampling.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.is_translation(geomxform.translation(5.0, 0.0))}")
+// ```
+pub fn is_translation(t: GeomXform) -> Bool
+    todo("geometry-nv.geomxform.is_translation")
+
+// Whether `t` maps axis-aligned rectangles to axis-aligned rectangles:
+// a scale and a translation, with no rotation or shear.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.is_axis_aligned(geomxform.scaling(2.0, 3.0))}")
+// ```
+pub fn is_axis_aligned(t: GeomXform) -> Bool
+    todo("geometry-nv.geomxform.is_axis_aligned")
+
+// Whether two transforms agree to within `eps` on every entry.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomxform.near(geomxform.identity(), geomxform.identity(), 0.0001)}")
+// ```
+pub fn near(a: GeomXform, b: GeomXform, eps: Float) -> Bool
+    todo("geometry-nv.geomxform.near")
+
+// The transform as SVG's `"matrix(a b c d e f)"`.
+//
+// The exact spelling svg-nv writes into a `transform` attribute, so the
+// two packages cannot disagree about the argument order.
+//
+// ```novo
+// use geomxform
+//
+// fn main() [io]
+//     println(geomxform.format_matrix(geomxform.identity()))
+// ```
+pub fn format_matrix(t: GeomXform) -> Str
+    todo("geometry-nv.geomxform.format_matrix")

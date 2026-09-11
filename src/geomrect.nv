@@ -1,0 +1,631 @@
+// geomrect.nv — axis-aligned rectangles and the algebra over them.
+//
+// STORED AS TWO CORNERS, not as an origin and a size.  Both spellings
+// are one subtraction apart, and the corner form is the one the algebra
+// wants: union is a min and a max per axis, intersection is a max and a
+// min per axis, and containment is four comparisons.  Written as origin
+// plus size, every one of those is a subtraction longer and rounds
+// differently at the far edge.  `of_origin_size` and `size_of` are the
+// other spelling, for callers whose data arrives that way.
+//
+// AN EMPTY RECTANGLE IS A VALUE, NOT AN ERROR.  `min` above `max` on
+// either axis means the rectangle encloses nothing, `is_empty` says so,
+// and every function here is defined on it: the union with an empty
+// rectangle is the other one, the intersection with anything is empty,
+// and `contains_point` is false.  That is not a convenience — an
+// intersection is EXPECTED to come back empty, and a language where
+// `@value` cannot be a `Result` payload (SPEC §14.5) would otherwise
+// force this package to un-unbox its central type for a case that is
+// not a failure.
+//
+// THE CANONICAL EMPTY RECTANGLE is `empty()`, all four coordinates
+// zero.  `normalize` is what turns any empty rectangle into it, so two
+// empty rectangles from different clips compare the same after one
+// call.  Nothing here calls `normalize` for the caller: it costs four
+// comparisons and most callers only ever ask `is_empty`.
+//
+// NO EFFECTS.
+
+use geompoint
+
+// An axis-aligned rectangle, as its low corner and its high corner.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)
+//     println("${geomrect.area(r)}")
+// ```
+pub @value
+struct GeomRectF
+    // The corner with the smaller coordinates on both axes — for a
+    // non-empty rectangle.  An empty one has this above `max` on at
+    // least one axis, which is exactly what makes it empty.
+    min: GeomPointF
+    // The corner with the larger coordinates on both axes.  EXCLUSIVE
+    // in the sense that `contains_point` is a half-open test: a point
+    // on the low edge is inside and a point on the high edge is not.
+    // That is the rule that makes a grid of abutting rectangles a
+    // partition rather than a set with doubled seams.
+    max: GeomPointF
+
+// An axis-aligned rectangle on an integer grid.
+//
+// The half-open rule is the same and matters more here: a `GeomRectI`
+// from `(0, 0)` to `(16, 16)` is 16 pixels wide, not 17, and two of
+// them side by side share no pixel.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh_i(0, 0, 16, 16)
+//     println("${geomrect.area_i(r)}")
+// ```
+pub @value
+struct GeomRectI
+    // The low corner.
+    min: GeomPointI
+    // The high corner, exclusive.
+    max: GeomPointI
+
+// A rectangle from two corners, as given.
+//
+// Does NOT sort them: a caller who hands the corners the wrong way
+// round gets an empty rectangle, which is the honest answer.
+// `normalize` is the sort, for a caller who wants it.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_corners(geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 3.0))
+//     println("${geomrect.width(r)}")
+// ```
+pub fn of_corners(min: GeomPointF, max: GeomPointF) -> GeomRectF
+    todo("geometry-nv.geomrect.of_corners")
+
+// A rectangle from an origin and a size.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_origin_size(geompoint.ptf(1.0, 1.0), geompoint.sizef(4.0, 3.0))
+//     println("${geomrect.height(r)}")
+// ```
+pub fn of_origin_size(origin: GeomPointF, size: GeomSizeF) -> GeomRectF
+    todo("geometry-nv.geomrect.of_origin_size")
+
+// A rectangle from four numbers: left, top, width, height.
+//
+// The spelling every drawing API in the world uses, so the bridge is
+// one call rather than two constructions.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0))}")
+// ```
+pub fn of_xywh(x: Float, y: Float, w: Float, h: Float) -> GeomRectF
+    todo("geometry-nv.geomrect.of_xywh")
+
+// A grid rectangle from two corners.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_corners_i(geompoint.pti(0, 0), geompoint.pti(4, 3))
+//     println("${geomrect.width_i(r)}")
+// ```
+pub fn of_corners_i(min: GeomPointI, max: GeomPointI) -> GeomRectI
+    todo("geometry-nv.geomrect.of_corners_i")
+
+// A grid rectangle from left, top, width, height.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width_i(geomrect.of_xywh_i(0, 0, 16, 16))}")
+// ```
+pub fn of_xywh_i(x: Int, y: Int, w: Int, h: Int) -> GeomRectI
+    todo("geometry-nv.geomrect.of_xywh_i")
+
+// The canonical rectangle that encloses nothing: all four coordinates
+// zero.
+//
+// The identity for `union` and the absorbing element for
+// `intersection`, which is the reason it is named rather than spelled
+// out at every call site.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(geomrect.empty())}")
+// ```
+pub fn empty() -> GeomRectF
+    todo("geometry-nv.geomrect.empty")
+
+// The canonical empty grid rectangle.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty_i(geomrect.empty_i())}")
+// ```
+pub fn empty_i() -> GeomRectI
+    todo("geometry-nv.geomrect.empty_i")
+
+// The smallest rectangle containing both points.
+//
+// The corner-order-free constructor: hand it any two opposite corners
+// and it sorts them.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.spanning(geompoint.ptf(4.0, 3.0), geompoint.ptf(0.0, 0.0))
+//     println("${geomrect.width(r)}")
+// ```
+pub fn spanning(a: GeomPointF, b: GeomPointF) -> GeomRectF
+    todo("geometry-nv.geomrect.spanning")
+
+// How wide, which is negative for an empty rectangle.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0))}")
+// ```
+pub fn width(r: GeomRectF) -> Float
+    todo("geometry-nv.geomrect.width")
+
+// How tall, which is negative for an empty rectangle.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.height(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0))}")
+// ```
+pub fn height(r: GeomRectF) -> Float
+    todo("geometry-nv.geomrect.height")
+
+// The rectangle's extents as a size.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.size_of(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)).h}")
+// ```
+pub fn size_of(r: GeomRectF) -> GeomSizeF
+    todo("geometry-nv.geomrect.size_of")
+
+// `width * height`, and 0.0 for an empty rectangle rather than the
+// negative product the extents would give.
+//
+// The clamp is deliberate: area is a measure, and a measure is never
+// negative.  A caller who wants the signed product has `width` and
+// `height`.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.area(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0))}")
+// ```
+pub fn area(r: GeomRectF) -> Float
+    todo("geometry-nv.geomrect.area")
+
+// The point in the middle.  `empty()` answers the origin.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.center(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)).x}")
+// ```
+pub fn center(r: GeomRectF) -> GeomPointF
+    todo("geometry-nv.geomrect.center")
+
+// Whether the rectangle encloses nothing.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(geomrect.of_xywh(0.0, 0.0, 0.0, 5.0))}")
+// ```
+pub fn is_empty(r: GeomRectF) -> Bool
+    todo("geometry-nv.geomrect.is_empty")
+
+// The same rectangle with its corners in order, or `empty()` if it
+// encloses nothing.
+//
+// Two rectangles that enclose nothing are then the SAME value, which is
+// what a caller comparing or hashing one needs.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty(geomrect.normalize(geomrect.of_xywh(0.0, 0.0, 0.0 - 1.0, 5.0)))}")
+// ```
+pub fn normalize(r: GeomRectF) -> GeomRectF
+    todo("geometry-nv.geomrect.normalize")
+
+// Whether the point is inside, on the half-open rule: the low edges are
+// in and the high edges are out.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.contains_point(r, geompoint.ptf(10.0, 5.0))}")
+// ```
+pub fn contains_point(r: GeomRectF, p: GeomPointF) -> Bool
+    todo("geometry-nv.geomrect.contains_point")
+
+// Whether `inner` is entirely within `outer`.
+//
+// An EMPTY `inner` is contained by everything, including another empty
+// rectangle — the set-theoretic answer, and the one that keeps
+// `contains_rect(a, intersection(a, b))` true without a special case.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let o = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.contains_rect(o, geomrect.of_xywh(1.0, 1.0, 2.0, 2.0))}")
+// ```
+pub fn contains_rect(outer: GeomRectF, inner: GeomRectF) -> Bool
+    todo("geometry-nv.geomrect.contains_rect")
+
+// Whether the two overlap in a region of non-zero area.
+//
+// Rectangles that merely touch along an edge do NOT intersect, which is
+// the half-open rule again and what makes a tiled grid report no
+// overlaps.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let a = geomrect.of_xywh(0.0, 0.0, 5.0, 5.0)
+//     println("${geomrect.intersects(a, geomrect.of_xywh(5.0, 0.0, 5.0, 5.0))}")
+// ```
+pub fn intersects(a: GeomRectF, b: GeomRectF) -> Bool
+    todo("geometry-nv.geomrect.intersects")
+
+// The region both rectangles cover, or an empty rectangle.
+//
+// NOT `?GeomRectF`, and the reason is SPEC §14.5: a `@value` struct
+// cannot be an optional payload.  It is also the better API — an
+// intersection coming back empty is the ordinary case, not the
+// exceptional one, and a caller who cares asks `is_empty`.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let a = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     let b = geomrect.of_xywh(5.0, 5.0, 10.0, 10.0)
+//     println("${geomrect.area(geomrect.intersection(a, b))}")
+// ```
+pub fn intersection(a: GeomRectF, b: GeomRectF) -> GeomRectF
+    todo("geometry-nv.geomrect.intersection")
+
+// The smallest rectangle containing both.
+//
+// An empty operand is ignored rather than dragged into the result:
+// `union(empty(), r)` is `r`.  Taking the raw min and max instead would
+// pull the answer to the origin, which is how a bounding box computed
+// by folding `union` over a list acquires a phantom corner.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let a = geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)
+//     println("${geomrect.width(geomrect.union(a, geomrect.of_xywh(9.0, 0.0, 1.0, 1.0)))}")
+// ```
+pub fn union(a: GeomRectF, b: GeomRectF) -> GeomRectF
+    todo("geometry-nv.geomrect.union")
+
+// The smallest rectangle containing the rectangle and the point.
+//
+// The fold a bounding box is actually built with.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.extend(geomrect.empty(), geompoint.ptf(3.0, 4.0))
+//     println("${geomrect.is_empty(r)}")
+// ```
+pub fn extend(r: GeomRectF, p: GeomPointF) -> GeomRectF
+    todo("geometry-nv.geomrect.extend")
+
+// The smallest rectangle containing every point in the list.
+//
+// `empty()` for an empty list.  This is the whole-list form of
+// `extend`, written here so a caller never folds it by hand — the fold
+// is where the empty-list case gets forgotten.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0)]
+//     println("${geomrect.width(geomrect.bounding(ps))}")
+// ```
+pub fn bounding(points: [GeomPointF]) -> GeomRectF
+    todo("geometry-nv.geomrect.bounding")
+
+// The rectangle moved by `v`.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.translate(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), geompoint.vecf(5.0, 0.0))
+//     println("${r.min.x}")
+// ```
+pub fn translate(r: GeomRectF, v: GeomVecF) -> GeomRectF
+    todo("geometry-nv.geomrect.translate")
+
+// The rectangle grown by `dx` on each x edge and `dy` on each y edge.
+//
+// Negative amounts SHRINK it, and shrinking past the middle gives an
+// empty rectangle rather than an inside-out one — which is what a
+// margin applied to a small box has to do.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.inflate(geomrect.of_xywh(1.0, 1.0, 8.0, 8.0), 1.0, 1.0)
+//     println("${geomrect.width(r)}")
+// ```
+pub fn inflate(r: GeomRectF, dx: Float, dy: Float) -> GeomRectF
+    todo("geometry-nv.geomrect.inflate")
+
+// `r` with `left`, `top`, `right` and `bottom` taken off its edges.
+//
+// The asymmetric inset a plot's axes need: the left gutter holds tick
+// labels and the top holds a title, and they are not the same width.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.inset(geomrect.of_xywh(0.0, 0.0, 100.0, 100.0), 40.0, 10.0, 10.0, 30.0)
+//     println("${geomrect.width(r)}")
+// ```
+pub fn inset(r: GeomRectF, left: Float, top: Float, right: Float, bottom: Float) -> GeomRectF
+    todo("geometry-nv.geomrect.inset")
+
+// The point in `r` closest to `p`.
+//
+// `p` itself when it is inside.  What a hit test with a tolerance and a
+// nearest-tile lookup both want.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.clamp_point(r, geompoint.ptf(20.0, 5.0)).x}")
+// ```
+pub fn clamp_point(r: GeomRectF, p: GeomPointF) -> GeomPointF
+    todo("geometry-nv.geomrect.clamp_point")
+
+// The four corners, starting at `min` and going toward positive x then
+// positive y — the order a quad's vertices are wound in.
+//
+// ```novo
+// use geomrect
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(geomrect.corners(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)))}")
+// ```
+pub fn corners(r: GeomRectF) -> [GeomPointF]
+    todo("geometry-nv.geomrect.corners")
+
+// Where `p` sits inside `r`, as a fraction per axis: `min` is
+// `(0, 0)` and `max` is `(1, 1)`.
+//
+// The forward half of a scale.  An empty rectangle has no interior to
+// place a point in and answers `(0, 0)`.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.relative(r, geompoint.ptf(5.0, 5.0)).x}")
+// ```
+pub fn relative(r: GeomRectF, p: GeomPointF) -> GeomPointF
+    todo("geometry-nv.geomrect.relative")
+
+// The point at fractional position `f` inside `r`.  The inverse of
+// `relative`, and not clamped.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+//     println("${geomrect.absolute(r, geompoint.ptf(0.5, 0.5)).x}")
+// ```
+pub fn absolute(r: GeomRectF, f: GeomPointF) -> GeomPointF
+    todo("geometry-nv.geomrect.absolute")
+
+// How wide the grid rectangle is, in whole units.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width_i(geomrect.of_xywh_i(0, 0, 16, 16))}")
+// ```
+pub fn width_i(r: GeomRectI) -> Int
+    todo("geometry-nv.geomrect.width_i")
+
+// How tall the grid rectangle is, in whole units.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.height_i(geomrect.of_xywh_i(0, 0, 16, 16))}")
+// ```
+pub fn height_i(r: GeomRectI) -> Int
+    todo("geometry-nv.geomrect.height_i")
+
+// How many whole units the grid rectangle covers; 0 when empty.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.area_i(geomrect.of_xywh_i(0, 0, 16, 16))}")
+// ```
+pub fn area_i(r: GeomRectI) -> Int
+    todo("geometry-nv.geomrect.area_i")
+
+// Whether the grid rectangle encloses nothing.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.is_empty_i(geomrect.of_xywh_i(0, 0, 0, 5))}")
+// ```
+pub fn is_empty_i(r: GeomRectI) -> Bool
+    todo("geometry-nv.geomrect.is_empty_i")
+
+// Whether the grid point is inside, half-open.
+//
+// ```novo
+// use geomrect
+// use geompoint
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh_i(0, 0, 16, 16)
+//     println("${geomrect.contains_point_i(r, geompoint.pti(16, 0))}")
+// ```
+pub fn contains_point_i(r: GeomRectI, p: GeomPointI) -> Bool
+    todo("geometry-nv.geomrect.contains_point_i")
+
+// Whether `inner` is entirely within `outer`, on the grid.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let o = geomrect.of_xywh_i(0, 0, 16, 16)
+//     println("${geomrect.contains_rect_i(o, geomrect.of_xywh_i(1, 1, 2, 2))}")
+// ```
+pub fn contains_rect_i(outer: GeomRectI, inner: GeomRectI) -> Bool
+    todo("geometry-nv.geomrect.contains_rect_i")
+
+// The region both grid rectangles cover, or an empty one.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let a = geomrect.of_xywh_i(0, 0, 16, 16)
+//     println("${geomrect.area_i(geomrect.intersection_i(a, geomrect.of_xywh_i(8, 8, 16, 16)))}")
+// ```
+pub fn intersection_i(a: GeomRectI, b: GeomRectI) -> GeomRectI
+    todo("geometry-nv.geomrect.intersection_i")
+
+// The smallest grid rectangle containing both.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let a = geomrect.of_xywh_i(0, 0, 1, 1)
+//     println("${geomrect.width_i(geomrect.union_i(a, geomrect.of_xywh_i(9, 0, 1, 1)))}")
+// ```
+pub fn union_i(a: GeomRectI, b: GeomRectI) -> GeomRectI
+    todo("geometry-nv.geomrect.union_i")
+
+// The smallest grid rectangle that contains every pixel `r` touches.
+//
+// Floor on the low corner, ceiling on the high one — so a shape drawn
+// into the result is not clipped, which the round-to-nearest rule would
+// do at both edges.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.5, 0.5, 1.0, 1.0)
+//     println("${geomrect.width_i(geomrect.to_int_outer(r))}")
+// ```
+pub fn to_int_outer(r: GeomRectF) -> GeomRectI
+    todo("geometry-nv.geomrect.to_int_outer")
+
+// The largest grid rectangle entirely inside `r`.
+//
+// Ceiling on the low corner, floor on the high one.  What a clip
+// rectangle wants: no pixel outside `r` is ever written.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     let r = geomrect.of_xywh(0.5, 0.5, 1.0, 1.0)
+//     println("${geomrect.is_empty_i(geomrect.to_int_inner(r))}")
+// ```
+pub fn to_int_inner(r: GeomRectF) -> GeomRectI
+    todo("geometry-nv.geomrect.to_int_inner")
+
+// A grid rectangle as a continuous one.  Exact.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println("${geomrect.width(geomrect.to_float_rect(geomrect.of_xywh_i(0, 0, 16, 16)))}")
+// ```
+pub fn to_float_rect(r: GeomRectI) -> GeomRectF
+    todo("geometry-nv.geomrect.to_float_rect")
+
+// A rectangle written as `"(x, y, w, h)"`.
+//
+// ```novo
+// use geomrect
+//
+// fn main() [io]
+//     println(geomrect.format(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)))
+// ```
+pub fn format(r: GeomRectF) -> Str
+    todo("geometry-nv.geomrect.format")

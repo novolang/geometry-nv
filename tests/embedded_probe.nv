@@ -1,0 +1,72 @@
+// embedded_probe.nv — the package's device claim, as firmware that
+// either builds for a Cortex-M or does not.
+//
+// `scripts/shard_audit.sh`'s `core-embedded` row copies this file and
+// the modules it reaches through `use`, transitively, into a package of
+// its own and runs
+//
+//   novo build --target=nrf52-qemu src/probe.nv
+//
+// which produces a real Cortex-M4 ELF or fails.
+//
+// WHAT IS BEING ASSERTED is the whole argument for `@value` in this
+// package.  `--target=nrf52-qemu` holds every function it compiles to
+// the embedded surface, so the checker walks the point, rectangle and
+// transform arithmetic and refuses anything that would allocate.  A
+// `GeomPointF` is two Floats in registers, a `GeomRectF` is four, a
+// `GeomXform` is six — and none of them touches a heap that a device
+// does not have.  Boxed, every one of those would be a cell with a
+// reference count, and this file would not link.
+//
+// WHICH MODULES ARE HERE, and which are not.  `geompoint`, `geomrect`
+// and `geomxform` are the unboxed arithmetic, and they are the claim.
+// `geompoly` and `geompack` hold lists — a ring's vertices, a bin's
+// shelves — and a list is a heap allocation; they are `core` and they
+// are pure, but they are not the part that runs in firmware, and the
+// audit's transitive `use` walk leaves them out because this file does
+// not name them.  That is the claim being made honestly rather than
+// broadly: the geometry a device does is the scalar half.
+//
+// What this deliberately does not check is the arithmetic.  The host
+// suites own correctness; this program owns "it builds for a device,
+// and the unboxed layout links".
+
+use geompoint
+use geomrect
+use geomxform
+
+// The transform chain a device actually runs: a viewport mapping, a
+// point through it, and the answer read back out.
+//
+// Three unboxed structs cross four call boundaries here and none of
+// them is a pointer.
+@tier(embedded)
+fn mapped_x() -> Float
+    let src: GeomRectF = geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)
+    let dst: GeomRectF = geomrect.of_xywh(0.0, 0.0, 128.0, 64.0)
+    let t: GeomXform = geomxform.mapping(src, dst)
+    let p: GeomPointF = geomxform.apply_point(t, geompoint.ptf(0.5, 0.5))
+    p.x
+
+// The rectangle algebra, which is what a display driver clips with.
+@tier(embedded)
+fn clipped_area() -> Float
+    let screen: GeomRectF = geomrect.of_xywh(0.0, 0.0, 128.0, 64.0)
+    let widget: GeomRectF = geomrect.of_xywh(100.0, 0.0, 64.0, 64.0)
+    geomrect.area(geomrect.intersection(screen, widget))
+
+// The vector arithmetic, with no square root in the hot half.
+@tier(embedded)
+fn reach_sq() -> Float
+    let v: GeomVecF = geompoint.between(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0))
+    geompoint.length_sq(v)
+
+@tier(rt)
+fn main() [hw, time]
+    bsp.board.init()
+    if mapped_x() > 0.0 and clipped_area() > 0.0 and reach_sq() > 0.0
+        hal.uart.write("PASS: geometry-embedded\n")
+    else
+        hal.uart.write("FAIL: geometry-embedded\n")
+    loop
+        core.rt.sleep_ms(1000)

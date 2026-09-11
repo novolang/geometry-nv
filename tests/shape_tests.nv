@@ -1,0 +1,356 @@
+// shape_tests.nv — the API suite for polygons and rectangle packing.
+//
+// RED ON PURPOSE: every body is a `todo()`.
+//
+// THE TWO MODULES ARE HERE TOGETHER because they share what separates
+// them from the rest of the package: both hold a LIST, so both are
+// boxed, and neither is in the embedded probe's transitive closure.
+// Everything in `geometry_tests.nv` is unboxed arithmetic that a device
+// runs; everything here allocates.
+//
+// WHERE THE NUMBERS COME FROM.  The unit square and the 3-4-5 triangle
+// again, whose areas are 1 and 6 and whose perimeters are 4 and 12.
+// The packing cases are worked by hand from the shelf rule stated in
+// `geompack`'s header — three sentences, so a reader can check every
+// expected coordinate against them without running anything.
+
+use std.test
+use std.list
+use geompoint
+use geomrect
+use geompoly
+use geompack
+
+@test
+fn test_a_ring_is_closed_implicitly() [io]
+    test.case("three vertices make a triangle, not an open path")
+    let tri = [geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)]
+    match geompoly.of_points(tri)
+        Ok(p)  =>
+            test.assert(geompoly.vertex_count(p) == 3)
+            test.case("and its perimeter counts the closing edge")
+            test.assert(geompoly.perimeter(p) == 12.0)
+        Err(_) => test.assert(false)
+
+    test.case("fewer than three is refused")
+    match geompoly.of_points([geompoint.origin(), geompoint.ptf(1.0, 0.0)])
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(e == GeomTooFewPoints)
+
+@test
+fn test_the_shoelace_area() [io]
+    test.case("the 3-4-5 triangle has area six")
+    let tri = [geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)]
+    test.assert(geompoly.area(geompoly.of_points_unchecked(tri)) == 6.0)
+
+    test.case("a rectangle's ring agrees with the rectangle")
+    let r = geomrect.of_xywh(0.0, 0.0, 2.0, 3.0)
+    test.assert(geompoly.area(geompoly.of_rect(r)) == geomrect.area(r))
+
+    test.case("the signed area's sign says which way the ring turns")
+    let ccw = geompoly.of_points_unchecked(tri)
+    test.assert(geompoly.signed_area(ccw) > 0.0)
+    test.assert(geompoly.signed_area(geompoly.reversed(ccw)) < 0.0)
+
+    test.case("but the unsigned one does not")
+    test.assert(geompoly.area(geompoly.reversed(ccw)) == 6.0)
+
+@test
+fn test_winding_and_orientation() [io]
+    let tri = geompoly.of_points_unchecked(
+        [geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)])
+
+    test.case("a positive signed area is counter-clockwise")
+    test.assert(geompoly.winding(tri) == GeomCounterClockwise)
+
+    test.case("reversed, it is clockwise")
+    test.assert(geompoly.winding(geompoly.reversed(tri)) == GeomClockwise)
+
+    test.case("a ring with no area has no direction")
+    test.assert(geompoly.winding(geompoly.empty()) == GeomDegenerate)
+
+    test.case("oriented fixes a ring that arrived the wrong way")
+    test.assert(geompoly.winding(geompoly.oriented(tri, GeomClockwise)) == GeomClockwise)
+
+    test.case("and leaves one that did not")
+    test.assert(geompoly.winding(geompoly.oriented(tri, GeomCounterClockwise)) == GeomCounterClockwise)
+
+@test
+fn test_containment_under_both_fill_rules() [io]
+    let sq = geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0))
+
+    test.case("a point in the middle is inside under either rule")
+    test.assert(geompoly.contains(sq, geompoint.ptf(5.0, 5.0), GeomEvenOdd))
+    test.assert(geompoly.contains(sq, geompoint.ptf(5.0, 5.0), GeomNonZero))
+
+    test.case("a point outside is outside under either rule")
+    test.assert(geompoly.contains(sq, geompoint.ptf(50.0, 5.0), GeomEvenOdd) == false)
+    test.assert(geompoly.contains(sq, geompoint.ptf(50.0, 5.0), GeomNonZero) == false)
+
+    test.case("a ring with no vertices contains nothing")
+    test.assert(geompoly.contains(geompoly.empty(), geompoint.origin(), GeomEvenOdd) == false)
+
+@test
+fn test_a_self_crossing_ring_is_where_the_rules_disagree() [io]
+    test.case("a five-pointed star drawn in one stroke")
+    // The vertices of a pentagram, in the order one stroke visits them:
+    // every second point of a regular pentagon.  Its middle is crossed
+    // twice by any ray, so even-odd calls it a hole and non-zero fills
+    // it.  This is the ONE case the two rules were both defined for.
+    let star = [
+        geompoint.ptf(0.0, 1.0),
+        geompoint.ptf(0.5878, 0.0 - 0.809),
+        geompoint.ptf(0.0 - 0.951, 0.309),
+        geompoint.ptf(0.951, 0.309),
+        geompoint.ptf(0.0 - 0.5878, 0.0 - 0.809)]
+    let p = geompoly.of_points_unchecked(star)
+
+    test.case("even-odd leaves the middle hollow")
+    test.assert(geompoly.contains(p, geompoint.origin(), GeomEvenOdd) == false)
+
+    test.case("non-zero fills it")
+    test.assert(geompoly.contains(p, geompoint.origin(), GeomNonZero))
+
+@test
+fn test_the_centroid_is_not_the_vertex_average() [io]
+    test.case("a square's centroid is its middle either way")
+    let sq = geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 2.0, 2.0))
+    test.assert(geompoly.centroid(sq).x == 1.0)
+    test.assert(geompoly.centroid(sq).y == 1.0)
+
+    test.case("but a ring with vertices crowded on one side is pulled by area, not by count")
+    // The same square with three extra vertices along its left edge.
+    // The vertex average moves left; the area centroid does not.
+    let crowded = geompoly.of_points_unchecked([
+        geompoint.ptf(0.0, 0.0),
+        geompoint.ptf(2.0, 0.0),
+        geompoint.ptf(2.0, 2.0),
+        geompoint.ptf(0.0, 2.0),
+        geompoint.ptf(0.0, 1.5),
+        geompoint.ptf(0.0, 1.0),
+        geompoint.ptf(0.0, 0.5)])
+    test.assert(geompoly.centroid(crowded).x == 1.0)
+
+@test
+fn test_bounds_and_convexity() [io]
+    test.case("the box around a ring")
+    let tri = geompoly.of_points_unchecked(
+        [geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)])
+    test.assert(geomrect.width(geompoly.bounds(tri)) == 4.0)
+    test.assert(geomrect.height(geompoly.bounds(tri)) == 3.0)
+
+    test.case("an empty ring has an empty box")
+    test.assert(geomrect.is_empty(geompoly.bounds(geompoly.empty())))
+
+    test.case("a triangle and a rectangle are convex")
+    test.assert(geompoly.is_convex(tri))
+    test.assert(geompoly.is_convex(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0))))
+
+    test.case("an L is not")
+    let ell = geompoly.of_points_unchecked([
+        geompoint.ptf(0.0, 0.0), geompoint.ptf(2.0, 0.0), geompoint.ptf(2.0, 1.0),
+        geompoint.ptf(1.0, 1.0), geompoint.ptf(1.0, 2.0), geompoint.ptf(0.0, 2.0)])
+    test.assert(geompoly.is_convex(ell) == false)
+
+@test
+fn test_regular_polygons() [io]
+    test.case("a hexagon has six vertices")
+    match geompoly.regular(geompoint.origin(), 10.0, 6)
+        Ok(p)  =>
+            test.assert(geompoly.vertex_count(p) == 6)
+            test.case("and its first vertex is at angle zero")
+            test.assert(geompoly.vertex_at(p, 0).x == 10.0)
+        Err(_) => test.assert(false)
+
+    test.case("two sides enclose nothing and are refused")
+    match geompoly.regular(geompoint.origin(), 10.0, 2)
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(e == GeomNonPositiveExtent)
+
+    test.case("so is a radius of zero")
+    match geompoly.regular(geompoint.origin(), 0.0, 6)
+        Ok(_)  => test.assert(false)
+        Err(e) => test.assert(e == GeomNonPositiveExtent)
+
+@test
+fn test_distance_to_an_edge_measures_the_boundary() [io]
+    let sq = geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 10.0))
+
+    test.case("a point in the middle is five from the nearest edge")
+    test.assert(geompoly.distance_to_edge(sq, geompoint.ptf(5.0, 5.0)) == 5.0)
+
+    test.case("and a point outside is positive too — this measures the edge, not the region")
+    test.assert(geompoly.distance_to_edge(sq, geompoint.ptf(15.0, 5.0)) == 5.0)
+
+    test.case("closest_on_segment snaps onto the segment, not past its end")
+    let a = geompoint.ptf(0.0, 0.0)
+    let b = geompoint.ptf(10.0, 0.0)
+    test.assert(geompoly.closest_on_segment(a, b, geompoint.ptf(5.0, 5.0)).x == 5.0)
+    test.assert(geompoly.closest_on_segment(a, b, geompoint.ptf(20.0, 0.0)).x == 10.0)
+
+@test
+fn test_segments_cross() [io]
+    test.case("an X crosses")
+    test.assert(geompoly.segments_cross(
+        geompoint.ptf(0.0, 0.0), geompoint.ptf(10.0, 10.0),
+        geompoint.ptf(0.0, 10.0), geompoint.ptf(10.0, 0.0)))
+
+    test.case("parallel segments do not")
+    test.assert(geompoly.segments_cross(
+        geompoint.ptf(0.0, 0.0), geompoint.ptf(10.0, 0.0),
+        geompoint.ptf(0.0, 1.0), geompoint.ptf(10.0, 1.0)) == false)
+
+    test.case("and neither do two that miss each other")
+    test.assert(geompoly.segments_cross(
+        geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 1.0),
+        geompoint.ptf(5.0, 5.0), geompoint.ptf(6.0, 6.0)) == false)
+
+@test
+fn test_simplify_drops_the_vertices_that_carry_nothing() [io]
+    test.case("three collinear points become two")
+    let line = geompoly.of_points_unchecked([
+        geompoint.ptf(0.0, 0.0), geompoint.ptf(5.0, 0.0), geompoint.ptf(10.0, 0.0),
+        geompoint.ptf(10.0, 10.0)])
+    test.assert(geompoly.vertex_count(geompoly.simplify(line, 0.1)) == 3)
+
+    test.case("a tolerance of zero changes nothing")
+    test.assert(geompoly.vertex_count(geompoly.simplify(line, 0.0)) == 4)
+
+    test.case("translate moves every vertex")
+    let t = geompoly.translate(line, geompoint.vecf(1.0, 1.0))
+    test.assert(geompoly.vertex_at(t, 0).x == 1.0)
+
+    test.case("points_of gives the ring back")
+    test.assert(list.len(geompoly.points_of(line)) == 4)
+
+    test.case("and an index past the end answers the origin rather than a failure")
+    test.assert(geompoly.vertex_at(line, 99).x == 0.0)
+
+@test
+fn test_a_shelf_opens_when_the_last_one_is_full() [io]
+    test.case("the first rectangle opens a shelf at the top")
+    var b = geompack.bin(100, 100)
+    b = geompack.place(b, 40, 30)
+    let first = geompack.last_placement(b)
+    test.assert(first.ok)
+    test.assert(first.rect.min.x == 0)
+    test.assert(first.rect.min.y == 0)
+    test.assert(geompack.shelf_count(b) == 1)
+
+    test.case("the second sits beside it on the same shelf")
+    b = geompack.place(b, 40, 20)
+    let second = geompack.last_placement(b)
+    test.assert(second.rect.min.x == 40)
+    test.assert(second.rect.min.y == 0)
+    test.assert(geompack.shelf_count(b) == 1)
+
+    test.case("the shelf keeps the height of its FIRST rectangle")
+    b = geompack.place(b, 40, 10)
+    test.assert(geompack.last_placement(b).rect.min.y == 30)
+    test.assert(geompack.shelf_count(b) == 2)
+
+@test
+fn test_a_rectangle_that_fits_nowhere_is_recorded_not_dropped() [io]
+    test.case("too wide for the bin")
+    var b = geompack.bin(100, 100)
+    b = geompack.place(b, 200, 10)
+    test.assert(geompack.last_placement(b).ok == false)
+
+    test.case("but the placement is still counted, so indices line up with the input")
+    test.assert(geompack.placed_count(b) == 1)
+    test.assert(geompack.fitted_count(b) == 0)
+
+    test.case("and its rectangle is the empty one")
+    test.assert(geomrect.is_empty_i(geompack.last_placement(b).rect))
+
+    test.case("a bin with no area fits nothing at all")
+    let none = geompack.place(geompack.bin(0, 0), 1, 1)
+    test.assert(geompack.last_placement(none).ok == false)
+
+@test
+fn test_the_caller_orders_the_input() [io]
+    test.case("order_by_height answers a permutation, tallest first")
+    let sizes = [geompoint.sizei(8, 8), geompoint.sizei(8, 32), geompoint.sizei(8, 16)]
+    let byh = geompack.order_by_height(sizes)
+    test.assert(list.len(byh) == 3)
+    test.assert(byh[0] == 1)
+    test.assert(byh[1] == 2)
+    test.assert(byh[2] == 0)
+
+    test.case("ties keep their original order, so the answer is the same every run")
+    let tied = [geompoint.sizei(4, 10), geompoint.sizei(9, 10)]
+    test.assert(geompack.order_by_height(tied)[0] == 0)
+
+    test.case("order_by_area is the other ordering, largest first")
+    let bya = geompack.order_by_area([geompoint.sizei(8, 8), geompoint.sizei(32, 32)])
+    test.assert(bya[0] == 1)
+
+@test
+fn test_occupancy_is_the_honest_measure() [io]
+    test.case("a bin packed edge to edge is full")
+    var b = geompack.bin(100, 100)
+    b = geompack.place_all(b, [geompoint.sizei(100, 50), geompoint.sizei(100, 50)])
+    test.assert(geompack.fitted_count(b) == 2)
+    test.assert(geompack.used_area(b) == 10000)
+    test.assert(geompack.free_area(b) == 0)
+    test.assert(geompack.occupancy(b) == 1.0)
+
+    test.case("a shelf packer strands the space at the end of a shelf")
+    var c = geompack.bin(100, 100)
+    c = geompack.place_all(c, [geompoint.sizei(60, 50), geompoint.sizei(60, 50)])
+    test.assert(geompack.shelf_count(c) == 2)
+    test.assert(geompack.occupancy(c) == 0.6)
+
+@test
+fn test_what_the_finished_sheet_is_cropped_to() [io]
+    test.case("used_bounds is the box around everything that fit")
+    var b = geompack.bin(256, 256)
+    b = geompack.place(b, 32, 32)
+    let ub = geompack.used_bounds(b)
+    test.assert(geomrect.width_i(ub) == 32)
+    test.assert(geomrect.height_i(ub) == 32)
+
+    test.case("an empty bin has an empty box")
+    test.assert(geomrect.is_empty_i(geompack.used_bounds(geompack.bin(256, 256))))
+
+    test.case("the square page rounds both axes together")
+    test.assert(geompack.square_page_size(b) == 32)
+
+    test.case("would_fit asks without changing the bin")
+    test.assert(geompack.would_fit(b, 32, 32))
+    test.assert(geompack.would_fit(b, 300, 10) == false)
+    test.assert(geompack.placed_count(b) == 1)
+
+@test
+fn test_uv_coordinates_do_not_sample_the_neighbour() [io]
+    test.case("a rectangle filling the bin covers the whole unit square")
+    var b = geompack.bin(64, 64)
+    b = geompack.place(b, 64, 64)
+    let uv = geompack.uv_of(b, geompack.last_placement(b))
+    test.assert(uv.min.x == 0.0)
+    test.assert(uv.max.x == 1.0)
+
+    test.case("and a quarter-width one covers a quarter — the half-open edge, divided")
+    var c = geompack.bin(64, 64)
+    c = geompack.place(c, 16, 16)
+    test.assert(geomrect.width(geompack.uv_of(c, geompack.last_placement(c))) == 0.25)
+
+@test
+fn test_a_bin_can_be_emptied_and_read_back() [io]
+    test.case("reset keeps the size and drops the contents")
+    var b = geompack.bin(64, 64)
+    b = geompack.place(b, 32, 32)
+    let r = geompack.reset(b)
+    test.assert(geompack.placed_count(r) == 0)
+    test.assert(geompack.shelf_count(r) == 0)
+    test.assert(r.width == 64)
+
+    test.case("placements come back in the order they were asked for")
+    var c = geompack.bin(100, 100)
+    c = geompack.place_all(c, [geompoint.sizei(10, 10), geompoint.sizei(10, 10)])
+    test.assert(list.len(geompack.placements(c)) == 2)
+    test.assert(geompack.placement_at(c, 0).rect.min.x == 0)
+    test.assert(geompack.placement_at(c, 1).rect.min.x == 10)
+
+    test.case("and an index past the end answers a failed placement")
+    test.assert(geompack.placement_at(c, 99).ok == false)

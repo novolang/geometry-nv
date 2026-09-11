@@ -1,0 +1,38 @@
+[package]
+name        = "geometry-nv"
+version     = "0.0.1"
+description = "Two-dimensional geometry as unboxed arithmetic: points, vectors and sizes in a Float and an Int flavour, rectangles with the union/intersection/containment algebra, 2x3 affine transforms, polygons with area, winding and containment, and a shelf packer for fitting rectangles into a bin."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`, and it is the easy case: every function here is arithmetic
+# over numbers the caller already holds.  Nothing is read, nothing is
+# written, no clock is consulted, and the state a call carries is a
+# handful of Floats in a frame.  That is also why the device claim is
+# made rather than skipped — see `tests/embedded_probe.nv`.
+layer       = "core"
+
+category    = "graphics"
+
+tags        = ["geometry", "point", "rect", "affine", "transform", "polygon", "packing", "euclid", "shapely"]
+repository  = "https://github.com/novolang/geometry-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Points, rectangles, transforms and the packing arithmetic"
+
+[dependencies]
+# None, and none is possible: a package that needed a dependency to add
+# two Floats would be the wrong package.  This is the bottom of the
+# drawing stack — svg-nv and plot-nv are above it, and atlas and sector
+# are the two programs it was cut out of.
