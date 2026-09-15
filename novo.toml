@@ -1,6 +1,6 @@
 [package]
 name        = "geometry-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "Two-dimensional geometry as unboxed arithmetic: points, vectors and sizes in a Float and an Int flavour, rectangles with the union/intersection/containment algebra, 2x3 affine transforms, polygons with area, winding and containment, and a shelf packer for fitting rectangles into a bin."
 license     = "Apache-2.0"
 
