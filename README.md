@@ -235,12 +235,13 @@ reference count (SPEC section 14.6).
 
 - **Unit or space type parameters.** euclid's `Point2D<T, U>` tags a point
   with the space it lives in, so screen coordinates and world coordinates
-  cannot be mixed up. A generic function whose return type applies a generic
-  head is not emitted for a call from another module on this toolchain, which
-  would make every tagged type unreachable across a module boundary.
-- **A single generic point type.** The same emission limit is why
-  `GeomPointF` and `GeomPointI` are written out rather than generated from a
-  `GeomPoint<T>`.
+  cannot be mixed up. A tag would be a type parameter on every type and
+  every function here, and the points of this package all live in one
+  untagged space.
+- **A single generic point type.** `GeomPointF` and `GeomPointI` are written
+  out rather than generated from a `GeomPoint<T>`. A Float point is a
+  position in a continuous space and an Int point is a pixel, and the
+  functions that turn one into the other are where the rounding happens.
 - **Polygons with holes, and boolean operations between polygons.** A polygon
   with holes is a list of rings with a fill rule, which is a different type
   with a different containment test and a different area. Adding it later is a

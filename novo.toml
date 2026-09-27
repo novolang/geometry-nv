@@ -24,9 +24,9 @@ category    = "graphics"
 tags        = ["geometry", "point", "rect", "affine", "transform", "polygon", "packing", "euclid", "shapely"]
 repository  = "https://github.com/novolang/geometry-nv"
 maintainers = ["novo-lang"]
-# 0.12.0 is the first toolchain with list slicing, which `geompoly` and
-# `geompack` copy their lists with.
-novo        = ">= 0.12.0"
+# 0.13.0 is the first toolchain that builds `math.abs` for a device and
+# sorts a list of pairs component by component.
+novo        = ">= 0.13.0"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.

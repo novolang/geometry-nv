@@ -70,7 +70,9 @@ packer, with three modules that build for a microcontroller.
   `place_all` copies once for the whole list.  A rectangle with a width
   or height that is not positive is recorded as a failed placement.
 - `order_by_height` and `order_by_area` are stable.
-- The toolchain floor is 0.12.0, the first with list slicing.
+- The toolchain floor is 0.13.0. The bodies are written for it and use
+  no workaround: `math.abs` builds for a device from that release, and
+  the two orderings sort a list of pairs with `list.sort`.
 
 ## 0.0.2 — 2026-09-15
 
