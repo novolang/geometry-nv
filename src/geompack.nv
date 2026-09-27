@@ -1,53 +1,37 @@
 // geompack.nv — fitting rectangles into a bin: the arithmetic under a
 // glyph atlas, a sprite sheet or a texture page.
 //
-// THE ALGORITHM IS SHELF, AND THE CHOICE IS ARGUED HERE because the
-// plan's row said "the packing arithmetic atlas carries" and atlas does
-// not carry a packer.  What atlas has is a UNIFORM CELL GRID — 16
-// columns by 6 rows of identical cells, one per printable ASCII glyph,
-// with `atlas_cols()` and `atlas_rows()` as constants and a cell
-// address that is a division and a remainder (`orbit/atlas/src/text.nv`).
-// That is a packer whose input happens to be all one size.  Its
-// `pack` function is something else entirely: bit-packing a z/x/y tile
-// triple into one Int (`orbit/atlas/src/tiles.nv`), which is an
-// encoding and has no rectangles in it.
+// The algorithm is shelf packing, next fit.  The bin is divided into
+// horizontal bands, called shelves, from the top down.  A rectangle
+// goes on the last shelf opened when it fits there in width and in
+// height.  Otherwise a new shelf opens below the last one, as tall as
+// the rectangle, and the rectangle goes there.  Otherwise it does not
+// fit, and the bin records a failed placement.  Earlier shelves are
+// never revisited.
 //
-// So the choice was open, and it is SHELF (next-fit decreasing height):
+// The state is three integers per shelf, and the number of shelves is
+// bounded by the bin's height over the shortest rectangle.  A uniform
+// grid of equal cells, the layout of a fixed-width font atlas, is a
+// shelf pack whose rectangles are all one size.  Skyline and MaxRects
+// packing are tighter, and keep a segment or rectangle list that grows
+// with the input.  They are not here.
 //
-//   - It generalises what atlas already does.  A uniform grid IS a
-//     shelf pack in which every rectangle has the same height, so the
-//     glyph atlas becomes a special case rather than a thing to replace,
-//     and a variable-size font — which is the reason atlas's grid wastes
-//     the space it does — starts working with no new concept.
-//   - Its state is THREE INTEGERS PER SHELF, and the number of shelves
-//     is bounded by the bin's height over the shortest rectangle.  That
-//     is a bound a device can reason about, and it is why this module
-//     can live in a package that claims `@tier(embedded)`.  Skyline —
-//     the better packer by occupancy — keeps a segment list whose length
-//     grows with the WIDTH and the input, which is an unbounded
-//     allocation in the middle of an atlas build.
-//   - It is online.  `place` takes one rectangle and returns the bin;
-//     nothing is buffered, so a caller streaming glyphs out of a font
-//     never holds them all.
+// The caller orders the input.  Sorting by decreasing height is what
+// makes shelf packing good, and `place` does not do it.
+// `order_by_height` and `order_by_area` answer a permutation, a list of
+// indices, rather than a sorted list.  A caller has other data to keep
+// with each size, such as a glyph number or a sprite name, and an index
+// list keeps all of it in step.
 //
-// Skyline and MaxRects are deliberately absent, and the note is here so
-// that adding one later is a decision rather than an omission somebody
-// notices: they pack tighter, they are worth having when a texture page
-// is the scarce resource, and they belong beside this one under their
-// own names rather than replacing `place`.
+// A bin is a value.  `place` answers a new bin and leaves the one it
+// was given unchanged, which costs a copy of the placements so far.
+// `place_all` packs a whole list with one copy.
 //
-// THE CALLER ORDERS THE INPUT.  "Decreasing height" is the half that
-// makes shelf packing good, and it is not done here: sorting a
-// `[GeomSizeI]` is rejected outright, because the sort lowering assumes
-// boxed element cells and these elements are unboxed (SPEC §14.6).
-// `order_by_height` answers with a PERMUTATION — a `[Int]` of indices —
-// which sidesteps that and is the better API anyway: the caller almost
-// always has parallel data (a glyph id, a sprite name) that has to
-// travel with each size, and an index list moves all of it at once
-// while a sorted size list would have lost the correspondence.
-//
-// NO EFFECTS.
+// These functions allocate, so the module is not part of the build for
+// a microcontroller.  They have no effects.
 
+use std.math
+use std.bits
 use geompoint
 use geomrect
 
@@ -63,9 +47,8 @@ pub @value
 struct GeomShelf
     // The shelf's top edge, measured down from the bin's origin.
     y: Int
-    // The shelf's height: the tallest rectangle on it.  Fixed when the
-    // first rectangle lands, which is the rule that makes the packer
-    // online and the reason the input wants sorting by height first.
+    // The shelf's height, fixed by the first rectangle placed on it.  A
+    // later rectangle on the shelf is no taller.
     height: Int
     // How much of the shelf's width is spoken for.  The next rectangle
     // on this shelf starts here.
@@ -73,11 +56,10 @@ struct GeomShelf
 
 // Where one rectangle ended up, or that it did not fit.
 //
-// `ok` rather than an optional, because a `@value` struct cannot be an
-// optional payload (SPEC §14.5).  It reads better here in any case: a
-// packing loop wants a placement per input either way, so that the
-// index of a placement is the index of its rectangle, and a failed one
-// is a hole in the sheet rather than a shorter list.
+// `ok` rather than an optional, which would box the placement (SPEC
+// section 14.5).  A bin keeps a placement per input, so the index of a
+// placement is the index of its rectangle, and a failed one is a hole
+// in the list rather than a shorter list.
 //
 // ```novo
 // use geompack
@@ -88,7 +70,7 @@ struct GeomShelf
 pub @value
 struct GeomPlacement
     // Where the rectangle sits in the bin, half-open like every
-    // `GeomRectI`.  Meaningless when `ok` is false — `geomrect.empty_i()`.
+    // `GeomRectI`.  `geomrect.empty_i()` when `ok` is false.
     rect: GeomRectI
     // Whether it fit at all.
     ok: Bool
@@ -106,20 +88,18 @@ pub struct GeomBin
     width: Int
     // How tall the bin is.
     height: Int
-    // The shelves opened so far, from the top down.  Bounded by the
-    // bin's height over the shortest rectangle packed.
+    // The shelves opened so far, from the top down.  There are at most
+    // as many as the bin's height over the shortest rectangle packed.
     shelves: [GeomShelf]
     // Every placement this bin has been asked for, in the order it was
-    // asked — the failures included, so an index into this list is an
-    // index into the caller's input.
+    // asked, the failures included.  An index into this list is an index
+    // into the caller's input.
     placed: [GeomPlacement]
 
 // An empty bin of the given size.
 //
-// A width or height that is not positive gives a bin nothing fits in;
-// `place` on it reports `ok` false for everything, which is the same
-// answer a caller would get from an honest refusal and costs no
-// `Result`.
+// A width or height that is not positive gives a bin nothing fits in,
+// and `place` on it records a failed placement every time.
 //
 // ```novo
 // use geompack
@@ -128,18 +108,19 @@ pub struct GeomBin
 //     println("${geompack.bin(256, 256).width}")
 // ```
 pub fn bin(width: Int, height: Int) -> GeomBin
-    todo("geometry-nv.geompack.bin")
+    let shelves: [GeomShelf] = []
+    let placed: [GeomPlacement] = []
+    GeomBin { width: width, height: height, shelves: shelves, placed: placed }
 
 // The bin with one more rectangle packed, or with a failed placement
 // recorded.
 //
-// The shelf rule, in full, because the whole behaviour of the packer is
-// these three sentences: the rectangle goes on the LAST shelf opened if
-// it fits there in width and in height; otherwise a new shelf opens
-// below the last one and it goes there; otherwise it does not fit and
-// the bin records a failed placement.  Earlier shelves are never
-// revisited — that is what "next fit" means, and it is why the input
-// wants `order_by_height` first.
+// The rectangle goes on the last shelf opened when it fits there in
+// width and in height.  Otherwise a new shelf opens below the last one
+// and it goes there.  Otherwise it does not fit, and the bin records a
+// failed placement.  A rectangle with a width or height that is not
+// positive has nothing to place and is recorded as failed.  The bin
+// given is not changed; the answer is a new bin.
 //
 // ```novo
 // use geompack
@@ -149,13 +130,17 @@ pub fn bin(width: Int, height: Int) -> GeomBin
 //     println("${geompack.last_placement(b).ok}")
 // ```
 pub fn place(b: GeomBin, w: Int, h: Int) -> GeomBin
-    todo("geometry-nv.geompack.place")
+    var shelves = b.shelves[:]
+    var placed = b.placed[:]
+    let at = spot(shelves, b.width, b.height, w, h)
+    record(shelves, placed, at, w, h)
+    GeomBin { width: b.width, height: b.height, shelves: shelves, placed: placed }
 
 // The bin with every size packed, in the order given.
 //
-// The whole-list form of `place`.  The caller supplies the order — pass
-// `order_by_height` through first for the packing this algorithm is
-// good at, or leave it alone when the order carries meaning.
+// The whole-list form of `place`, which copies the bin once rather
+// than once per rectangle.  The caller supplies the order: the sizes in
+// the order `order_by_height` gives pack best.
 //
 // ```novo
 // use geompack
@@ -166,14 +151,18 @@ pub fn place(b: GeomBin, w: Int, h: Int) -> GeomBin
 //     println("${geompack.placed_count(b)}")
 // ```
 pub fn place_all(b: GeomBin, sizes: [GeomSizeI]) -> GeomBin
-    todo("geometry-nv.geompack.place_all")
+    var shelves = b.shelves[:]
+    var placed = b.placed[:]
+    for sz in sizes
+        let at = spot(shelves, b.width, b.height, sz.w, sz.h)
+        record(shelves, placed, at, sz.w, sz.h)
+    GeomBin { width: b.width, height: b.height, shelves: shelves, placed: placed }
 
 // The indices of `sizes`, tallest first.
 //
-// A PERMUTATION rather than a sorted list, for the two reasons in the
-// header: a `[GeomSizeI]` cannot be sorted at all, and the caller's
-// parallel data has to travel with each size.  Ties keep their original
-// order, so the answer is the same on every run.
+// The answer is a permutation: `sizes[order[0]]` is the tallest.  Sizes
+// of equal height keep their original order, so the answer is the same
+// on every run.
 //
 // ```novo
 // use geompack
@@ -185,13 +174,16 @@ pub fn place_all(b: GeomBin, sizes: [GeomSizeI]) -> GeomBin
 //     println("${list.len(geompack.order_by_height(sz))}")
 // ```
 pub fn order_by_height(sizes: [GeomSizeI]) -> [Int]
-    todo("geometry-nv.geompack.order_by_height")
+    var keys: [Int] = []
+    for sz in sizes
+        list.push(keys, sz.h)
+    order_desc(keys)
 
 // The indices of `sizes`, largest area first.
 //
-// The other ordering worth having: better than height order when the
-// rectangles are near-square and much worse when they are not, which is
-// exactly the shape of a sprite sheet versus a font.
+// It packs better than height order when the rectangles are close to
+// square, as sprites often are, and worse when their heights differ
+// widely, as glyphs do.  Sizes of equal area keep their original order.
 //
 // ```novo
 // use geompack
@@ -203,7 +195,10 @@ pub fn order_by_height(sizes: [GeomSizeI]) -> [Int]
 //     println("${list.len(geompack.order_by_area(sz))}")
 // ```
 pub fn order_by_area(sizes: [GeomSizeI]) -> [Int]
-    todo("geometry-nv.geompack.order_by_area")
+    var keys: [Int] = []
+    for sz in sizes
+        list.push(keys, sz.w * sz.h)
+    order_desc(keys)
 
 // Where the most recent `place` put its rectangle.
 //
@@ -216,7 +211,10 @@ pub fn order_by_area(sizes: [GeomSizeI]) -> [Int]
 //     println("${geompack.last_placement(geompack.bin(64, 64)).ok}")
 // ```
 pub fn last_placement(b: GeomBin) -> GeomPlacement
-    todo("geometry-nv.geompack.last_placement")
+    let n = list.len(b.placed)
+    if n == 0
+        return failed()
+    b.placed[n - 1]
 
 // Every placement, in the order it was asked for, failures included.
 //
@@ -228,7 +226,7 @@ pub fn last_placement(b: GeomBin) -> GeomPlacement
 //     println("${list.len(geompack.placements(geompack.bin(64, 64)))}")
 // ```
 pub fn placements(b: GeomBin) -> [GeomPlacement]
-    todo("geometry-nv.geompack.placements")
+    b.placed[:]
 
 // The placement at `i`, or one with `ok` false when `i` is out of
 // range.
@@ -240,7 +238,9 @@ pub fn placements(b: GeomBin) -> [GeomPlacement]
 //     println("${geompack.placement_at(geompack.bin(64, 64), 0).ok}")
 // ```
 pub fn placement_at(b: GeomBin, i: Int) -> GeomPlacement
-    todo("geometry-nv.geompack.placement_at")
+    if i < 0 or i >= list.len(b.placed)
+        return failed()
+    b.placed[i]
 
 // How many placements were asked for, failures included.
 //
@@ -251,7 +251,7 @@ pub fn placement_at(b: GeomBin, i: Int) -> GeomPlacement
 //     println("${geompack.placed_count(geompack.bin(64, 64))}")
 // ```
 pub fn placed_count(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.placed_count")
+    list.len(b.placed)
 
 // How many of them fit.
 //
@@ -262,7 +262,11 @@ pub fn placed_count(b: GeomBin) -> Int
 //     println("${geompack.fitted_count(geompack.bin(64, 64))}")
 // ```
 pub fn fitted_count(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.fitted_count")
+    var n = 0
+    for pl in b.placed
+        if pl.ok
+            n = n + 1
+    n
 
 // How many shelves are open.
 //
@@ -273,7 +277,7 @@ pub fn fitted_count(b: GeomBin) -> Int
 //     println("${geompack.shelf_count(geompack.bin(64, 64))}")
 // ```
 pub fn shelf_count(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.shelf_count")
+    list.len(b.shelves)
 
 // The area every fitted rectangle covers, together.
 //
@@ -284,13 +288,18 @@ pub fn shelf_count(b: GeomBin) -> Int
 //     println("${geompack.used_area(geompack.bin(64, 64))}")
 // ```
 pub fn used_area(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.used_area")
+    var total = 0
+    for pl in b.placed
+        if pl.ok
+            total = total + geomrect.area_i(pl.rect)
+    total
 
 // The bin's area less the used area.
 //
-// NOT the area still packable: a shelf packer strands space at the end
-// of every shelf and below the last one, and this number counts it.
-// `occupancy` is the honest quality measure.
+// This is not the area still packable.  A shelf packer leaves space at
+// the end of every shelf and above the shorter rectangles on it, and
+// this number counts that space.  A bin with an extent that is not
+// positive has no area and answers 0.
 //
 // ```novo
 // use geompack
@@ -299,12 +308,12 @@ pub fn used_area(b: GeomBin) -> Int
 //     println("${geompack.free_area(geompack.bin(64, 64))}")
 // ```
 pub fn free_area(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.free_area")
+    bin_area(b) - used_area(b)
 
 // The used area as a fraction of the bin's, in `0.0 ..= 1.0`.
 //
-// The number to compare two orderings by, and the number that says
-// whether a tighter algorithm would be worth adding.
+// The number to compare two orderings by.  A bin with no area answers
+// 0.0.
 //
 // ```novo
 // use geompack
@@ -313,12 +322,15 @@ pub fn free_area(b: GeomBin) -> Int
 //     println("${geompack.occupancy(geompack.bin(64, 64))}")
 // ```
 pub fn occupancy(b: GeomBin) -> Float
-    todo("geometry-nv.geompack.occupancy")
+    let whole = bin_area(b)
+    if whole == 0
+        return 0.0
+    used_area(b) as Float / whole as Float
 
 // The smallest rectangle containing every fitted placement.
 //
-// What a caller crops the finished sheet to, so a bin sized generously
-// does not cost a texture upload of mostly empty pixels.
+// A caller crops the finished sheet to it.  `geomrect.empty_i()` when
+// nothing fitted.
 //
 // ```novo
 // use geompack
@@ -328,15 +340,18 @@ pub fn occupancy(b: GeomBin) -> Float
 //     println("${geomrect.is_empty_i(geompack.used_bounds(geompack.bin(64, 64)))}")
 // ```
 pub fn used_bounds(b: GeomBin) -> GeomRectI
-    todo("geometry-nv.geompack.used_bounds")
+    var box = geomrect.empty_i()
+    for pl in b.placed
+        if pl.ok
+            box = geomrect.union_i(box, pl.rect)
+    box
 
 // The smallest power-of-two square that would hold everything placed so
 // far.
 //
-// The question a texture upload actually asks, and the reason it is
-// here rather than in the caller: a graphics API that wants a
-// power-of-two page wants it in both axes, and rounding the two edges
-// separately gives an oblong that has to be padded again.
+// The side is the smallest power of two at least as large as both the
+// width and the height of `used_bounds`, so one number sizes a square
+// texture page.  0 when nothing fitted.
 //
 // ```novo
 // use geompack
@@ -345,11 +360,16 @@ pub fn used_bounds(b: GeomBin) -> GeomRectI
 //     println("${geompack.square_page_size(geompack.bin(64, 64))}")
 // ```
 pub fn square_page_size(b: GeomBin) -> Int
-    todo("geometry-nv.geompack.square_page_size")
+    let box = used_bounds(b)
+    if geomrect.is_empty_i(box)
+        return 0
+    let need = math.max(box.max.x, box.max.y)
+    bits.shl(1, bits.bit_len(need - 1))
 
 // Whether a rectangle of this size would fit if placed next.
 //
-// Asks without changing the bin, for a caller deciding between pages.
+// It asks without changing the bin, for a caller deciding between
+// pages.
 //
 // ```novo
 // use geompack
@@ -358,15 +378,16 @@ pub fn square_page_size(b: GeomBin) -> Int
 //     println("${geompack.would_fit(geompack.bin(64, 64), 32, 32)}")
 // ```
 pub fn would_fit(b: GeomBin, w: Int, h: Int) -> Bool
-    todo("geometry-nv.geompack.would_fit")
+    spot(b.shelves, b.width, b.height, w, h).ok
 
 // A packed rectangle as texture coordinates inside the bin: `min` at
 // `(0, 0)` and `max` at `(1, 1)` for a rectangle filling the whole bin.
 //
-// The last step of every atlas build, written once here so that the
-// half-open rule and the division by the bin's size cannot drift apart
-// — a UV computed with an inclusive `max` samples one texel into the
-// neighbour, which is the classic atlas seam.
+// The corners are divided by the bin's size on the half-open rule, so
+// the high edge is the first texel outside the rectangle.  A
+// coordinate computed from an inclusive high corner would sample one
+// texel of the neighbour.  A failed placement, or a bin with no area,
+// answers `geomrect.empty()`.
 //
 // ```novo
 // use geompack
@@ -377,7 +398,13 @@ pub fn would_fit(b: GeomBin, w: Int, h: Int) -> Bool
 //     println("${geomrect.width(geompack.uv_of(b, geompack.last_placement(b)))}")
 // ```
 pub fn uv_of(b: GeomBin, p: GeomPlacement) -> GeomRectF
-    todo("geometry-nv.geompack.uv_of")
+    if not p.ok or b.width <= 0 or b.height <= 0
+        return geomrect.empty()
+    let bw = b.width as Float
+    let bh = b.height as Float
+    geomrect.of_corners(
+        geompoint.ptf(p.rect.min.x as Float / bw, p.rect.min.y as Float / bh),
+        geompoint.ptf(p.rect.max.x as Float / bw, p.rect.max.y as Float / bh))
 
 // The bin emptied, keeping its size.
 //
@@ -388,4 +415,66 @@ pub fn uv_of(b: GeomBin, p: GeomPlacement) -> GeomRectF
 //     println("${geompack.placed_count(geompack.reset(geompack.bin(64, 64)))}")
 // ```
 pub fn reset(b: GeomBin) -> GeomBin
-    todo("geometry-nv.geompack.reset")
+    bin(b.width, b.height)
+
+// A placement that did not fit.
+fn failed() -> GeomPlacement
+    GeomPlacement { rect: geomrect.empty_i(), ok: false }
+
+// The bin's area, or 0 for a bin with an extent that is not positive.
+fn bin_area(b: GeomBin) -> Int
+    if b.width <= 0 or b.height <= 0
+        return 0
+    b.width * b.height
+
+// Where the shelf rule would put a `w` by `h` rectangle, without
+// changing anything.  The answer's `ok` is false when it fits nowhere.
+// A rectangle with an extent that is not positive has nothing to place
+// and does not fit.
+fn spot(shelves: [GeomShelf], width: Int, height: Int, w: Int, h: Int) -> GeomPlacement
+    if w <= 0 or h <= 0 or w > width
+        return failed()
+    let n = list.len(shelves)
+    var top = 0
+    if n > 0
+        let last = shelves[n - 1]
+        if h <= last.height and last.used + w <= width
+            return GeomPlacement { rect: geomrect.of_xywh_i(last.used, last.y, w, h), ok: true }
+        top = last.y + last.height
+    if top + h > height
+        return failed()
+    GeomPlacement { rect: geomrect.of_xywh_i(0, top, w, h), ok: true }
+
+// Write the placement `at` into the two lists: a new shelf when it sits
+// below the last one, or the last shelf's used width moved on when it
+// sits beside what is there.
+fn record(var shelves: [GeomShelf], var placed: [GeomPlacement], at: GeomPlacement, w: Int, h: Int)
+    list.push(placed, at)
+    if not at.ok
+        return
+    let n = list.len(shelves)
+    if n > 0 and shelves[n - 1].y == at.rect.min.y
+        let last = shelves[n - 1]
+        shelves[n - 1] = GeomShelf { y: last.y, height: last.height, used: last.used + w }
+    else
+        list.push(shelves, GeomShelf { y: at.rect.min.y, height: h, used: w })
+
+// The indices of `keys`, largest key first, with equal keys kept in
+// their original order.  The comparison breaks every tie by index, so
+// the order is total and the same on every run, although `list.sort_by`
+// itself promises no stability.
+fn order_desc(keys: [Int]) -> [Int]
+    var idx: [Int] = []
+    for i in 0..list.len(keys)
+        list.push(idx, i)
+    list.sort_by(idx, (a, b) => rank(keys, a, b))
+    idx
+
+// Negative when index `a` goes before index `b`: the larger key first,
+// and the smaller index first between equal keys.
+fn rank(keys: [Int], a: Int, b: Int) -> Int
+    if keys[a] > keys[b]
+        return 0 - 1
+    if keys[a] < keys[b]
+        return 1
+    a - b

@@ -1,39 +1,34 @@
-// geompoly.nv — polygons: area, winding, containment, bounds.
+// geompoly.nv — polygons: area, winding, containment, bounds, and the
+// functions whose answer is a list of points.
 //
-// A POLYGON IS ONE CLOSED RING, held as its vertices in order.  The
-// closing edge is IMPLICIT — the last vertex connects to the first, and
-// a caller who repeats the first vertex at the end gets a zero-length
-// edge that changes no answer here but does cost a step in every walk.
-// atlas's `overlay.nv` and sector's `geodata.nv` both already store
-// rings this way; keeping the rule means the data those two hold moves
-// into a `GeomPoly` without a reshape.
+// A polygon is one closed ring, held as its vertices in order.  The
+// closing edge is implicit: the last vertex connects to the first.  A
+// caller who repeats the first vertex at the end adds a zero-length
+// edge, which changes no answer here and costs a step in every walk.
 //
-// ONE RING, NOT MANY.  A polygon with holes is a list of rings with a
-// fill rule, and that is a different type with a different containment
-// test and a different area.  It is not here, on purpose: neither
-// consumer needs it (a district boundary and a plot's fill are both
-// simple rings), and adding it later is a new type beside this one
-// rather than a change to it.
+// It is one ring, not several.  A polygon with holes is a list of
+// rings with a fill rule, which is a different type with a different
+// containment test and a different area.  It would be a new type
+// beside this one.
 //
-// WHY `GeomPoly` IS BOXED while everything else in this package is
-// `@value`: it holds a list, and a `@value` struct's fields are
-// restricted to inline-sized types (SPEC §14.3).  The list's ELEMENTS
-// are the unboxed `GeomPointF`, stored as one flat buffer with no
-// per-element cell (SPEC §14.6), which is where the memory actually
-// goes — so the box costs one header for the whole polygon.
+// `GeomPoly` is a boxed struct because it holds a list.  The list's
+// elements are unboxed `GeomPointF`s in one flat buffer (SPEC section
+// 14.6), so a ring of ten thousand vertices is one allocation.
 //
-// WHAT A `[GeomPointF]` CANNOT DO, because it shapes this module: the
-// higher-order list functions, sorting, joining and slicing are
-// rejected on a list of `@value` elements (SPEC §14.6) — their
-// lowerings assume boxed cells.  `push`, `get`, `len`, indexing and
-// `for` are what remain, and every function here is written out of
-// those.  `simplify` and `reverse` therefore build a new list rather
-// than permuting one.
+// Lists are shared rather than copied when they are passed (SPEC
+// section 4.1), so a polygon copies the list it is made from, and
+// `points_of` answers a copy.  A caller who changes a list afterwards
+// does not change a polygon.  Every function here that answers a
+// polygon or a list answers a new one and leaves its argument alone.
 //
-// NO EFFECTS.
+// These functions allocate, so the module is not part of the build for
+// a microcontroller.  They have no effects.
 
+use std.math
 use geompoint
 use geomrect
+use geomxform
+use geomtrig
 
 // Which way a ring turns.
 //
@@ -47,10 +42,10 @@ use geomrect
 // ```
 pub enum GeomWinding
     // The signed area is positive: the ring turns from positive x
-    // toward positive y.  On a screen, where y grows down, that LOOKS
-    // clockwise; on a plot it looks anticlockwise.  The name follows
-    // the mathematics rather than the appearance, because the
-    // appearance depends on a convention this package does not fix.
+    // toward positive y.  On a screen, where y grows down, that looks
+    // clockwise, and on a plot it looks anticlockwise.  The name
+    // follows the mathematics, because the appearance depends on which
+    // way the caller's y axis points.
     GeomCounterClockwise
     // The signed area is negative.
     GeomClockwise
@@ -60,10 +55,10 @@ pub enum GeomWinding
 
 // How a ring decides which side of itself is inside.
 //
-// Identical for a simple ring, and different for one that crosses
-// itself — a five-pointed star drawn in one stroke has a hollow middle
-// under `GeomEvenOdd` and a filled one under `GeomNonZero`.  The names
-// are SVG's `fill-rule`, so svg-nv passes the value straight through.
+// The two rules agree on a ring that does not cross itself.  A
+// five-pointed star drawn in one stroke has a hollow middle under
+// `GeomEvenOdd` and a filled one under `GeomNonZero`.  The names are
+// the two values of SVG's `fill-rule` property (SVG 1.1 section 11.3).
 //
 // ```novo
 // use geompoly
@@ -95,18 +90,11 @@ pub enum GeomFault
     // arithmetic needs it positive.
     GeomNonPositiveExtent
 
-// The rule every `GeomFault` is printed by: name the constraint that
-// was not met, in the caller's terms rather than the algorithm's.
-//
-// `Result<T, E>` requires `E: Error` (SPEC § 3.4), so this impl is what
-// makes the two fallible signatures in this package spellable at all.
+// Each `GeomFault` prints the constraint that was not met, in the
+// caller's terms.  `Result<T, E>` requires `E: Error` (SPEC section
+// 3.4).
 impl Error for GeomFault
     // What went wrong, as a line a caller can print.
-    //
-    // Written out rather than stubbed, because the TEXT is part of the
-    // interface: it is what an end user of a program built on this
-    // package actually reads, and a `todo()` here would publish an
-    // error type whose whole observable surface is missing.
     fn message(self) -> Str
         match self
             GeomTooFewPoints      =>
@@ -143,15 +131,16 @@ pub struct GeomPoly
 //         Err(_) => println("refused")
 // ```
 pub fn of_points(points: [GeomPointF]) -> Result<GeomPoly, GeomFault>
-    todo("geometry-nv.geompoly.of_points")
+    if list.len(points) < 3
+        return Err(GeomTooFewPoints)
+    Ok(GeomPoly { points: points[:] })
 
 // A polygon from its vertices, checking nothing.
 //
-// For a caller assembling rings in a loop from data that was already
-// validated — a tile of boundaries where the check would run once per
-// ring and answer the same way every time.  A degenerate polygon is
-// still a value every function here is defined on: its area is 0.0, its
-// winding is `GeomDegenerate` and it contains no point.
+// For a caller assembling rings from data that was already validated.
+// A polygon with fewer than three vertices is still a value every
+// function here is defined on: its area is 0.0, its winding is
+// `GeomDegenerate` and it contains no point.
 //
 // ```novo
 // use geompoly
@@ -161,7 +150,7 @@ pub fn of_points(points: [GeomPointF]) -> Result<GeomPoly, GeomFault>
 //     println("${geompoly.vertex_count(geompoly.of_points_unchecked([geompoint.origin()]))}")
 // ```
 pub fn of_points_unchecked(points: [GeomPointF]) -> GeomPoly
-    todo("geometry-nv.geompoly.of_points_unchecked")
+    GeomPoly { points: points[:] }
 
 // A polygon with no vertices.
 //
@@ -172,7 +161,8 @@ pub fn of_points_unchecked(points: [GeomPointF]) -> GeomPoly
 //     println("${geompoly.vertex_count(geompoly.empty())}")
 // ```
 pub fn empty() -> GeomPoly
-    todo("geometry-nv.geompoly.empty")
+    let none: [GeomPointF] = []
+    GeomPoly { points: none }
 
 // The four corners of a rectangle as a ring.
 //
@@ -184,7 +174,9 @@ pub fn empty() -> GeomPoly
 //     println("${geompoly.vertex_count(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)))}")
 // ```
 pub fn of_rect(r: GeomRectF) -> GeomPoly
-    todo("geometry-nv.geompoly.of_rect")
+    if geomrect.is_empty(r)
+        return empty()
+    GeomPoly { points: corners(r) }
 
 // A regular polygon with `sides` vertices, the first at angle 0.
 //
@@ -201,7 +193,15 @@ pub fn of_rect(r: GeomRectF) -> GeomPoly
 //         Err(_) => println("refused")
 // ```
 pub fn regular(center: GeomPointF, radius: Float, sides: Int) -> Result<GeomPoly, GeomFault>
-    todo("geometry-nv.geompoly.regular")
+    if sides < 3 or not radius > 0.0
+        return Err(GeomNonPositiveExtent)
+    var pts: [GeomPointF] = []
+    let step = 2.0 * math.pi() / sides as Float
+    for k in 0..sides
+        let angle = step * k as Float
+        list.push(pts,
+            geompoint.ptf(center.x + radius * math.cos(angle), center.y + radius * math.sin(angle)))
+    Ok(GeomPoly { points: pts })
 
 // How many vertices the ring has.
 //
@@ -212,7 +212,7 @@ pub fn regular(center: GeomPointF, radius: Float, sides: Int) -> Result<GeomPoly
 //     println("${geompoly.vertex_count(geompoly.empty())}")
 // ```
 pub fn vertex_count(p: GeomPoly) -> Int
-    todo("geometry-nv.geompoly.vertex_count")
+    list.len(p.points)
 
 // The vertices in order.
 //
@@ -224,12 +224,11 @@ pub fn vertex_count(p: GeomPoly) -> Int
 //     println("${list.len(geompoly.points_of(geompoly.empty()))}")
 // ```
 pub fn points_of(p: GeomPoly) -> [GeomPointF]
-    todo("geometry-nv.geompoly.points_of")
+    p.points[:]
 
-// The vertex at `i`, or the ORIGIN when `i` is out of range.
+// The vertex at `i`, or the origin when `i` is out of range.
 //
-// Not `?GeomPointF`: the element type is `@value` and cannot be an
-// optional payload (SPEC §14.5).  `vertex_count` is the bound to check.
+// `vertex_count` is the bound to check.
 //
 // ```novo
 // use geompoly
@@ -238,14 +237,15 @@ pub fn points_of(p: GeomPoly) -> [GeomPointF]
 //     println("${geompoly.vertex_at(geompoly.empty(), 0).x}")
 // ```
 pub fn vertex_at(p: GeomPoly, i: Int) -> GeomPointF
-    todo("geometry-nv.geompoly.vertex_at")
+    if i < 0 or i >= list.len(p.points)
+        return geompoint.origin()
+    p.points[i]
 
-// The area the ring encloses, SIGNED — negative for a clockwise ring.
+// The area the ring encloses, signed: negative for a clockwise ring.
 //
-// The shoelace sum, which is one multiply-add per edge and needs no
-// triangulation.  The sign is the useful half: it is what `winding`
-// reads, and it is how a caller detects a ring that arrived the wrong
-// way round.
+// This is the shoelace sum, one multiply-add per edge.  The sign is
+// what `winding` reads, and it is how a caller detects a ring that
+// arrived the wrong way round.
 //
 // ```novo
 // use geompoly
@@ -255,7 +255,19 @@ pub fn vertex_at(p: GeomPoly, i: Int) -> GeomPointF
 //     println("${geompoly.signed_area(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 2.0, 3.0)))}")
 // ```
 pub fn signed_area(p: GeomPoly) -> Float
-    todo("geometry-nv.geompoly.signed_area")
+    let n = list.len(p.points)
+    if n < 3
+        return 0.0
+    // Every vertex is taken relative to the first, which keeps the
+    // products small for a ring far from the origin.  The terms that
+    // touch the first vertex are then zero and are skipped.
+    let o = p.points[0]
+    var twice = 0.0
+    for i in 1..n - 1
+        let a = geompoint.between(o, p.points[i])
+        let b = geompoint.between(o, p.points[i + 1])
+        twice = twice + geompoint.cross(a, b)
+    twice * 0.5
 
 // The area the ring encloses, never negative.
 //
@@ -267,7 +279,10 @@ pub fn signed_area(p: GeomPoly) -> Float
 //     println("${geompoly.area(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 2.0, 3.0)))}")
 // ```
 pub fn area(p: GeomPoly) -> Float
-    todo("geometry-nv.geompoly.area")
+    let s = signed_area(p)
+    if s < 0.0
+        return 0.0 - s
+    s
 
 // The total length of the ring's edges, the closing one included.
 //
@@ -279,7 +294,11 @@ pub fn area(p: GeomPoly) -> Float
 //     println("${geompoly.perimeter(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 2.0, 3.0)))}")
 // ```
 pub fn perimeter(p: GeomPoly) -> Float
-    todo("geometry-nv.geompoly.perimeter")
+    let n = list.len(p.points)
+    var total = 0.0
+    for i in 0..n
+        total = total + geomtrig.distance(p.points[i], p.points[(i + 1) % n])
+    total
 
 // Which way the ring turns.
 //
@@ -292,12 +311,19 @@ pub fn perimeter(p: GeomPoly) -> Float
 //     println("${geompoly.winding(r) == GeomDegenerate}")
 // ```
 pub fn winding(p: GeomPoly) -> GeomWinding
-    todo("geometry-nv.geompoly.winding")
+    let s = signed_area(p)
+    if s > 0.0
+        return GeomCounterClockwise
+    if s < 0.0
+        return GeomClockwise
+    GeomDegenerate
 
 // The same ring, guaranteed to turn the way asked.
 //
-// Reverses it when it does not, and returns it unchanged when it does.
-// A degenerate ring has no direction to fix and comes back as it was.
+// The ring is reversed when it turns the other way and answered
+// unchanged when it already turns the way asked.  A ring that encloses
+// no area has no direction to fix and comes back as it was, and so does
+// every ring when `w` is `GeomDegenerate`.
 //
 // ```novo
 // use geompoly
@@ -308,7 +334,10 @@ pub fn winding(p: GeomPoly) -> GeomWinding
 //     println("${geompoly.vertex_count(geompoly.oriented(r, GeomClockwise))}")
 // ```
 pub fn oriented(p: GeomPoly, w: GeomWinding) -> GeomPoly
-    todo("geometry-nv.geompoly.oriented")
+    let now = winding(p)
+    if w == GeomDegenerate or now == GeomDegenerate or now == w
+        return p
+    reversed(p)
 
 // The same ring walked the other way.
 //
@@ -321,16 +350,19 @@ pub fn oriented(p: GeomPoly, w: GeomWinding) -> GeomPoly
 //     println("${geompoly.vertex_count(geompoly.reversed(r))}")
 // ```
 pub fn reversed(p: GeomPoly) -> GeomPoly
-    todo("geometry-nv.geompoly.reversed")
+    var out: [GeomPointF] = []
+    let n = list.len(p.points)
+    for i in 0..n
+        list.push(out, p.points[n - 1 - i])
+    GeomPoly { points: out }
 
-// The centre of the ring's AREA — its centroid, not the average of its
+// The centre of the ring's area: its centroid, not the average of its
 // vertices.
 //
-// The distinction has bitten every map label that was ever placed by
-// averaging coordinates: a boundary traced with a hundred points along
-// one coast and three across the other pulls the average toward the
-// detailed side, and the shoelace-weighted centroid does not.  A
-// degenerate ring has no area to centre and answers the vertex average.
+// A boundary traced with a hundred points along one side and three
+// along another has a vertex average pulled toward the detailed side,
+// and an area centroid that is not.  A ring that encloses no area
+// answers the vertex average, and a ring with no vertices the origin.
 //
 // ```novo
 // use geompoly
@@ -341,7 +373,23 @@ pub fn reversed(p: GeomPoly) -> GeomPoly
 //     println("${geompoly.centroid(r).x}")
 // ```
 pub fn centroid(p: GeomPoly) -> GeomPointF
-    todo("geometry-nv.geompoly.centroid")
+    let n = list.len(p.points)
+    if n == 0
+        return geompoint.origin()
+    let o = p.points[0]
+    var twice = 0.0
+    var cx = 0.0
+    var cy = 0.0
+    for i in 1..n - 1
+        let a = geompoint.between(o, p.points[i])
+        let b = geompoint.between(o, p.points[i + 1])
+        let c = geompoint.cross(a, b)
+        twice = twice + c
+        cx = cx + (a.dx + b.dx) * c
+        cy = cy + (a.dy + b.dy) * c
+    if twice == 0.0
+        return vertex_average(p.points)
+    geompoint.ptf(o.x + cx / (3.0 * twice), o.y + cy / (3.0 * twice))
 
 // The smallest axis-aligned rectangle containing every vertex.
 //
@@ -356,16 +404,17 @@ pub fn centroid(p: GeomPoly) -> GeomPointF
 //     println("${geomrect.width(geompoly.bounds(r))}")
 // ```
 pub fn bounds(p: GeomPoly) -> GeomRectF
-    todo("geometry-nv.geompoly.bounds")
+    geomrect.bounding(p.points)
 
 // Whether the point is inside, under the given fill rule.
 //
-// A point exactly ON an edge is not promised either answer: the
+// A point exactly on an edge is not promised either answer.  The
 // crossing test reads it as inside or outside depending on which way
-// the edge runs, and no floating-point test can do better without a
-// tolerance the caller has to choose.  What IS promised is consistency
-// — the same point and the same ring always give the same answer —
-// which is what a hit test needs.
+// the edge runs, and no floating-point test does better without a
+// tolerance.  The same point and the same ring always give the same
+// answer, which is what a hit test needs.  The test is the winding
+// number with a ray toward positive x, which also counts the crossings
+// the even-odd rule reads.
 //
 // ```novo
 // use geompoly
@@ -377,13 +426,31 @@ pub fn bounds(p: GeomPoly) -> GeomRectF
 //     println("${geompoly.contains(r, geompoint.ptf(5.0, 5.0), GeomEvenOdd)}")
 // ```
 pub fn contains(p: GeomPoly, pt: GeomPointF, rule: GeomFillRule) -> Bool
-    todo("geometry-nv.geompoly.contains")
+    let n = list.len(p.points)
+    var crossings = 0
+    var wind = 0
+    for i in 0..n
+        let a = p.points[i]
+        let b = p.points[(i + 1) % n]
+        let side = geompoint.cross(geompoint.between(a, b), geompoint.between(a, pt))
+        if a.y <= pt.y
+            if b.y > pt.y and side > 0.0
+                crossings = crossings + 1
+                wind = wind + 1
+        else if b.y <= pt.y and side < 0.0
+            crossings = crossings + 1
+            wind = wind - 1
+    match rule
+        GeomEvenOdd => crossings % 2 == 1
+        GeomNonZero => wind != 0
 
-// Whether the ring is convex: every turn goes the same way.
+// Whether the ring is convex: every turn goes the same way, and the
+// ring goes round once.
 //
-// Worth asking because a convex ring admits a containment test that is
-// one sign check per edge with no ray casting, and a renderer can fill
-// it as a triangle fan.
+// The second condition is what separates a convex ring from a star
+// drawn in one stroke, which also turns the same way at every vertex.
+// Collinear vertices are allowed.  A ring that encloses no area is not
+// convex.  A renderer can fill a convex ring as a triangle fan.
 //
 // ```novo
 // use geompoly
@@ -393,7 +460,31 @@ pub fn contains(p: GeomPoly, pt: GeomPointF, rule: GeomFillRule) -> Bool
 //     println("${geompoly.is_convex(geompoly.of_rect(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)))}")
 // ```
 pub fn is_convex(p: GeomPoly) -> Bool
-    todo("geometry-nv.geompoly.is_convex")
+    let n = list.len(p.points)
+    if n < 3
+        return false
+    var turn = 0.0
+    var x_flips = 0
+    var y_flips = 0
+    var last_dx = 0.0
+    var last_dy = 0.0
+    for i in 0..n
+        let e1 = geompoint.between(p.points[i], p.points[(i + 1) % n])
+        let e2 = geompoint.between(p.points[(i + 1) % n], p.points[(i + 2) % n])
+        let c = geompoint.cross(e1, e2)
+        if c != 0.0
+            if turn != 0.0 and (c > 0.0) != (turn > 0.0)
+                return false
+            turn = c
+        if e1.dx != 0.0
+            if last_dx != 0.0 and (e1.dx > 0.0) != (last_dx > 0.0)
+                x_flips = x_flips + 1
+            last_dx = e1.dx
+        if e1.dy != 0.0
+            if last_dy != 0.0 and (e1.dy > 0.0) != (last_dy > 0.0)
+                y_flips = y_flips + 1
+            last_dy = e1.dy
+    turn != 0.0 and x_flips <= 2 and y_flips <= 2
 
 // Every vertex displaced by `v`.
 //
@@ -406,15 +497,19 @@ pub fn is_convex(p: GeomPoly) -> Bool
 //     println("${geompoly.vertex_count(p)}")
 // ```
 pub fn translate(p: GeomPoly, v: GeomVecF) -> GeomPoly
-    todo("geometry-nv.geompoly.translate")
+    var out: [GeomPointF] = []
+    for q in p.points
+        list.push(out, geompoint.offset(q, v))
+    GeomPoly { points: out }
 
 // The ring with vertices dropped while the shape stays within
 // `tolerance` of the original.
 //
-// Ramer-Douglas-Peucker, which is what every map renderer uses and what
-// atlas would want between zoom levels: the vertices that carry the
-// shape survive and the ones on a near-straight run do not.  A
-// `tolerance` of 0.0 or less changes nothing.
+// This is the Ramer-Douglas-Peucker algorithm on a closed ring.  The
+// ring is cut at its first vertex and at the vertex farthest from it,
+// and each half keeps the vertices farther than `tolerance` from the
+// chord that would replace them.  A `tolerance` of 0.0 or less, or a
+// ring of three vertices or fewer, changes nothing.
 //
 // ```novo
 // use geompoly
@@ -425,12 +520,54 @@ pub fn translate(p: GeomPoly, v: GeomVecF) -> GeomPoly
 //     println("${geompoly.vertex_count(geompoly.simplify(r, 0.1))}")
 // ```
 pub fn simplify(p: GeomPoly, tolerance: Float) -> GeomPoly
-    todo("geometry-nv.geompoly.simplify")
+    let n = list.len(p.points)
+    if not tolerance > 0.0 or n < 4
+        return p
+    // The ring is cut at its first vertex and at the vertex farthest
+    // from it, and each of the two chains is simplified on its own.
+    var far = 0
+    var far_d = 0.0
+    for i in 1..n
+        let d = geompoint.distance_sq(p.points[0], p.points[i])
+        if d > far_d
+            far_d = d
+            far = i
+    var keep: [Bool] = []
+    for i in 0..n
+        list.push(keep, i == 0 or i == far)
+    // A stack of chains still to examine, as two lists of ends.  `depth`
+    // is the number of live entries; the lists never shrink.
+    var lo_stack: [Int] = [0, far]
+    var hi_stack: [Int] = [far, n]
+    var depth = 2
+    while depth > 0
+        depth = depth - 1
+        let lo = lo_stack[depth]
+        let hi = hi_stack[depth]
+        var worst = 0
+        var worst_d = 0.0
+        for i in lo + 1..hi
+            let q = closest_on_segment(p.points[lo], p.points[hi % n], p.points[i])
+            let d = geompoint.distance_sq(q, p.points[i])
+            if d > worst_d
+                worst_d = d
+                worst = i
+        if worst_d > tolerance * tolerance
+            keep[worst] = true
+            depth = push_chain(lo_stack, hi_stack, depth, lo, worst)
+            depth = push_chain(lo_stack, hi_stack, depth, worst, hi)
+    var out: [GeomPointF] = []
+    for i in 0..n
+        if keep[i]
+            list.push(out, p.points[i])
+    GeomPoly { points: out }
 
-// The shortest distance from `pt` to the ring's BOUNDARY.
+// The shortest distance from `pt` to the ring's boundary, the closing
+// edge included.
 //
-// Always positive, inside or out — this measures the edge, not the
-// region.  `contains` is what says which side.
+// It is never negative, inside or out: it measures the edge, not the
+// region, and `contains` says which side.  A ring with no vertices has
+// no boundary and answers positive infinity.
 //
 // ```novo
 // use geompoly
@@ -442,13 +579,20 @@ pub fn simplify(p: GeomPoly, tolerance: Float) -> GeomPoly
 //     println("${geompoly.distance_to_edge(r, geompoint.ptf(5.0, 5.0))}")
 // ```
 pub fn distance_to_edge(p: GeomPoly, pt: GeomPointF) -> Float
-    todo("geometry-nv.geompoly.distance_to_edge")
+    let n = list.len(p.points)
+    if n == 0
+        return math.infinity()
+    var best = geompoint.distance_sq(p.points[0], pt)
+    for i in 0..n
+        let q = closest_on_segment(p.points[i], p.points[(i + 1) % n], pt)
+        best = math.min(best, geompoint.distance_sq(q, pt))
+    math.sqrt(best)
 
 // The point on segment `a`-`b` closest to `pt`.
 //
-// The primitive under `distance_to_edge`, public because snapping to a
-// line is a thing callers do on its own — a cursor to a road, a value
-// to an axis.
+// The primitive under `distance_to_edge`.  Snapping a cursor to a
+// line or a value to an axis is the same question.  A segment of zero
+// length answers `a`.
 //
 // ```novo
 // use geompoly
@@ -460,9 +604,21 @@ pub fn distance_to_edge(p: GeomPoly, pt: GeomPointF) -> Float
 //     println("${geompoly.closest_on_segment(a, b, geompoint.ptf(5.0, 5.0)).x}")
 // ```
 pub fn closest_on_segment(a: GeomPointF, b: GeomPointF, pt: GeomPointF) -> GeomPointF
-    todo("geometry-nv.geompoly.closest_on_segment")
+    let ab = geompoint.between(a, b)
+    let len_sq = geompoint.length_sq(ab)
+    if len_sq == 0.0
+        return a
+    let t = geompoint.dot(geompoint.between(a, pt), ab) / len_sq
+    if t <= 0.0
+        return a
+    if t >= 1.0
+        return b
+    geompoint.offset(a, geompoint.scale(ab, t))
 
-// Whether segment `a`-`b` crosses segment `c`-`d`.
+// Whether segment `a`-`b` and segment `c`-`d` share a point.
+//
+// Both segments include their end points, so two segments that touch
+// at an end, and two collinear segments that overlap, count.
 //
 // ```novo
 // use geompoly
@@ -475,4 +631,86 @@ pub fn closest_on_segment(a: GeomPointF, b: GeomPointF, pt: GeomPointF) -> GeomP
 //     println("${geompoly.segments_cross(a, b, c, geompoint.ptf(10.0, 0.0))}")
 // ```
 pub fn segments_cross(a: GeomPointF, b: GeomPointF, c: GeomPointF, d: GeomPointF) -> Bool
-    todo("geometry-nv.geompoly.segments_cross")
+    let d1 = orientation(c, d, a)
+    let d2 = orientation(c, d, b)
+    let d3 = orientation(a, b, c)
+    let d4 = orientation(a, b, d)
+    if d1 * d2 < 0 and d3 * d4 < 0
+        return true
+    let touch_cd = d1 == 0 and on_box(c, d, a) or d2 == 0 and on_box(c, d, b)
+    touch_cd or d3 == 0 and on_box(a, b, c) or d4 == 0 and on_box(a, b, d)
+
+// The average of the vertices: the answer `centroid` gives for a ring
+// that encloses no area.
+fn vertex_average(points: [GeomPointF]) -> GeomPointF
+    var sx = 0.0
+    var sy = 0.0
+    for q in points
+        sx = sx + q.x
+        sy = sy + q.y
+    let n = list.len(points) as Float
+    geompoint.ptf(sx / n, sy / n)
+
+// Which side of the line through `a` and `b` the point `c` is on: 1 for
+// the side positive y turns toward, -1 for the other, 0 on the line.
+fn orientation(a: GeomPointF, b: GeomPointF, c: GeomPointF) -> Int
+    let v = geompoint.cross(geompoint.between(a, b), geompoint.between(a, c))
+    if v > 0.0
+        return 1
+    if v < 0.0
+        return 0 - 1
+    0
+
+// Whether `c`, already known to be on the line through `a` and `b`,
+// lies within the segment's bounding box and so on the segment.
+fn on_box(a: GeomPointF, b: GeomPointF, c: GeomPointF) -> Bool
+    c.x >= math.min(a.x, b.x) and c.x <= math.max(a.x, b.x) and c.y >= math.min(a.y, b.y) and c.y <= math.max(a.y, b.y)
+
+// The four corners of a rectangle, starting at `min` and going toward
+// positive x, then positive y: the order a quad's vertices are wound
+// in, with a positive signed area.
+//
+// ```novo
+// use geompoly
+// use geomrect
+// use std.list
+//
+// fn main() [io]
+//     println("${list.len(geompoly.corners(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)))}")
+// ```
+pub fn corners(r: GeomRectF) -> [GeomPointF]
+    var out: [GeomPointF] = []
+    list.push(out, r.min)
+    list.push(out, geompoint.ptf(r.max.x, r.min.y))
+    list.push(out, r.max)
+    list.push(out, geompoint.ptf(r.min.x, r.max.y))
+    out
+
+// Every point in the list sent through `t`, in order, as a new list.
+//
+// ```novo
+// use geompoly
+// use geomxform
+// use geompoint
+// use std.list
+//
+// fn main() [io]
+//     let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 1.0)]
+//     println("${list.len(geompoly.apply_points(geomxform.identity(), ps))}")
+// ```
+pub fn apply_points(t: GeomXform, points: [GeomPointF]) -> [GeomPointF]
+    var out: [GeomPointF] = []
+    for q in points
+        list.push(out, geomxform.apply_point(t, q))
+    out
+
+// Put the chain `lo`..`hi` on the stack at `depth`, reusing a slot
+// when there is one, and answer the new depth.
+fn push_chain(var los: [Int], var his: [Int], depth: Int, lo: Int, hi: Int) -> Int
+    if depth < list.len(los)
+        los[depth] = lo
+        his[depth] = hi
+    else
+        list.push(los, lo)
+        list.push(his, hi)
+    depth + 1
