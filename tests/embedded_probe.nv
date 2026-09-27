@@ -1,5 +1,6 @@
-// embedded_probe.nv — the package's device claim, as firmware that
-// either builds for a Cortex-M or does not.
+// embedded_probe.nv — `geompoint`, `geomrect` and `geomxform` on a
+// microcontroller, as firmware that builds for a Cortex-M, boots there
+// and checks its answers.
 //
 // `scripts/shard_audit.sh`'s `core-embedded` row copies this file and
 // the modules it reaches through `use`, transitively, into a package of
@@ -7,39 +8,31 @@
 //
 //   novo build --target=nrf52-qemu src/probe.nv
 //
-// which produces a real Cortex-M4 ELF or fails.
+// which produces a Cortex-M4 ELF or fails.  The same ELF boots under
 //
-// WHAT IS BEING ASSERTED is the whole argument for `@value` in this
-// package.  `--target=nrf52-qemu` holds every function it compiles to
-// the embedded surface, so the checker walks the point, rectangle and
-// transform arithmetic and refuses anything that would allocate.  A
-// `GeomPointF` is two Floats in registers, a `GeomRectF` is four, a
-// `GeomXform` is six — and none of them touches a heap that a device
-// does not have.  Boxed, every one of those would be a cell with a
-// reference count, and this file would not link.
+//   qemu-system-arm -machine mps2-an386 -nographic -semihosting -kernel probe.elf
 //
-// WHICH MODULES ARE HERE, and which are not.  `geompoint`, `geomrect`
-// and `geomxform` are the unboxed arithmetic, and they are the claim.
-// `geompoly` and `geompack` hold lists — a ring's vertices, a bin's
-// shelves — and a list is a heap allocation; they are `core` and they
-// are pure, but they are not the part that runs in firmware, and the
-// audit's transitive `use` walk leaves them out because this file does
-// not name them.  That is the claim being made honestly rather than
-// broadly: the geometry a device does is the scalar half.
+// and writes `PASS: geometry-embedded` when every answer is right.
+// `--target=nrf52-qemu` holds every function it compiles to the
+// embedded surface, so the build also checks that the three modules
+// allocate nothing and call nothing from the C maths library.
 //
-// What this deliberately does not check is the arithmetic.  The host
-// suites own correctness; this program owns "it builds for a device,
-// and the unboxed layout links".
+// `geompoly`, `geompack`, `geomtrig` and `geomtext` are not here.  The
+// first two hold lists, the third calls the C maths library and the
+// fourth builds text, and one host-only function anywhere in a
+// compilation unit is an undefined symbol at link time whether or not
+// the firmware calls it.
+//
+// The expected answers are exact.  Every number involved is a small
+// whole number or a half, so no rounding enters.
 
 use geompoint
 use geomrect
 use geomxform
 
-// The transform chain a device actually runs: a viewport mapping, a
-// point through it, and the answer read back out.
-//
-// Three unboxed structs cross four call boundaries here and none of
-// them is a pointer.
+// The transform chain a display driver runs: a viewport mapping, a
+// point through it, and the answer read back out.  64.0 is the middle
+// of a 128-pixel-wide screen.
 @tier(embedded)
 fn mapped_x() -> Float
     let src: GeomRectF = geomrect.of_xywh(0.0, 0.0, 1.0, 1.0)
@@ -48,23 +41,35 @@ fn mapped_x() -> Float
     let p: GeomPointF = geomxform.apply_point(t, geompoint.ptf(0.5, 0.5))
     p.x
 
-// The rectangle algebra, which is what a display driver clips with.
+// The rectangle algebra a display driver clips with: a 64-pixel widget
+// at x = 100 keeps 28 columns of a 128 by 64 screen.
 @tier(embedded)
 fn clipped_area() -> Float
     let screen: GeomRectF = geomrect.of_xywh(0.0, 0.0, 128.0, 64.0)
     let widget: GeomRectF = geomrect.of_xywh(100.0, 0.0, 64.0, 64.0)
     geomrect.area(geomrect.intersection(screen, widget))
 
-// The vector arithmetic, with no square root in the hot half.
+// The vector arithmetic, with no square root.
 @tier(embedded)
 fn reach_sq() -> Float
     let v: GeomVecF = geompoint.between(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0))
     geompoint.length_sq(v)
 
+// A transform undone: scale by two about (1, 1), invert, and take the
+// pixel the point (-0.5, 3.5) lands in after the round trip.
+@tier(embedded)
+fn round_trip_pixel() -> Int
+    let t: GeomXform = geomxform.scaling_about(2.0, 2.0, geompoint.ptf(1.0, 1.0))
+    let back: GeomXform = geomxform.invert(t)
+    let p: GeomPointF = geomxform.apply_point(back, geomxform.apply_point(t, geompoint.ptf(0.0 - 0.5, 3.5)))
+    let px: GeomPointI = geompoint.to_int_floor(p)
+    px.x * 10 + px.y
+
 @tier(rt)
 fn main() [hw, time]
     bsp.board.init()
-    if mapped_x() > 0.0 and clipped_area() > 0.0 and reach_sq() > 0.0
+    let good = mapped_x() == 64.0 and clipped_area() == 1792.0 and reach_sq() == 25.0
+    if good and round_trip_pixel() == 0 - 7
         hal.uart.write("PASS: geometry-embedded\n")
     else
         hal.uart.write("FAIL: geometry-embedded\n")

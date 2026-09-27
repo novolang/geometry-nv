@@ -1,0 +1,81 @@
+// tests/alloc_probe.nv — a program that reaches every function in
+// `geompoint`, `geomrect` and `geomxform`, so the emitted LLVM can be
+// read for a call to the allocator.
+//
+// This is not a test.  `tests/alloc_scan.sh` builds it with `--opt=0`
+// and reads the IR.  At the default optimisation level the probe
+// inlines into `novo_main`, no function is left to attribute an
+// allocation to, and the scan would pass over nothing.
+//
+// Every function is called, because a function the probe never reaches
+// is one the linker drops and the scan never sees.  The numbers are
+// summed and printed rather than checked; the suites own correctness.
+
+use std.str
+use geompoint
+use geomrect
+use geomxform
+
+fn points() -> Float
+    let p = geompoint.ptf(1.5, 0.0 - 2.5)
+    let q = geompoint.to_float(geompoint.pti(3, 4))
+    let v = geompoint.add(geompoint.vecf(1.0, 2.0), geompoint.vec_to_float(geompoint.veci(3, 4)))
+    let w = geompoint.sub(geompoint.scale(v, 2.0), geompoint.negate(geompoint.perpendicular(v)))
+    var score = geompoint.dot(v, w) + geompoint.cross(v, w) + geompoint.length_sq(w)
+    score = score + geompoint.distance_sq(p, q) + geompoint.lerp(p, q, 0.25).x
+    score = score + geompoint.midpoint(p, q).y + geompoint.offset(geompoint.origin(), geompoint.zero_vec()).x
+    score = score + geompoint.between(p, q).dx
+    if geompoint.near(p, q, 0.5)
+        score = score + 1.0
+    score = score + geompoint.to_int_floor(p).x as Float + geompoint.to_int_round(p).y as Float
+    let s = geompoint.sizef(2.0, 3.0)
+    score = score + geompoint.area_of(s) + geompoint.size_to_float(geompoint.sizei(4, 5)).w
+    score = score + geompoint.area_of_i(geompoint.sizei(4, 5)) as Float
+    if geompoint.size_is_empty(s) or geompoint.size_is_empty_i(geompoint.sizei(0, 1))
+        score = score + 1.0
+    score
+
+fn rects(pts: [GeomPointF]) -> Float
+    let a = geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)
+    let b = geomrect.of_origin_size(geompoint.ptf(5.0, 5.0), geompoint.sizef(10.0, 10.0))
+    let c = geomrect.of_corners(geompoint.ptf(1.0, 1.0), geompoint.ptf(2.0, 2.0))
+    let s = geomrect.spanning(geompoint.ptf(4.0, 3.0), geompoint.origin())
+    var score = geomrect.width(a) + geomrect.height(b) + geomrect.size_of(c).w + geomrect.area(s)
+    score = score + geomrect.center(a).x + geomrect.normalize(geomrect.empty()).min.x
+    if geomrect.is_empty(c) or geomrect.contains_point(a, geompoint.origin())
+        score = score + 1.0
+    if geomrect.contains_rect(a, c) or geomrect.intersects(a, b)
+        score = score + 1.0
+    score = score + geomrect.area(geomrect.intersection(a, b)) + geomrect.area(geomrect.union(a, b))
+    score = score + geomrect.extend(a, geompoint.ptf(30.0, 30.0)).max.x + geomrect.width(geomrect.bounding(pts))
+    score = score + geomrect.translate(a, geompoint.vecf(1.0, 1.0)).min.x
+    score = score + geomrect.width(geomrect.inflate(a, 1.0, 1.0)) + geomrect.width(geomrect.inset(a, 1.0, 2.0, 3.0, 4.0))
+    score = score + geomrect.clamp_point(a, geompoint.ptf(50.0, 0.0)).x
+    score = score + geomrect.relative(a, geompoint.ptf(5.0, 5.0)).x + geomrect.absolute(a, geompoint.ptf(0.5, 0.5)).y
+    let g = geomrect.of_xywh_i(0, 0, 16, 16)
+    let h = geomrect.of_corners_i(geompoint.pti(8, 8), geompoint.pti(24, 24))
+    var n = geomrect.width_i(g) + geomrect.height_i(h) + geomrect.area_i(geomrect.intersection_i(g, h))
+    n = n + geomrect.area_i(geomrect.union_i(g, h)) + geomrect.area_i(geomrect.empty_i())
+    if geomrect.is_empty_i(g) or geomrect.contains_point_i(g, geompoint.pti(1, 1)) or geomrect.contains_rect_i(g, h)
+        n = n + 1
+    n = n + geomrect.width_i(geomrect.to_int_outer(c)) + geomrect.width_i(geomrect.to_int_inner(c))
+    score + n as Float + geomrect.width(geomrect.to_float_rect(g))
+
+fn xforms() -> Float
+    let t = geomxform.compose(geomxform.scaling(2.0, 3.0), geomxform.translation(1.0, 1.0))
+    let u = geomxform.about(geomxform.shear(1.0, 0.0), geompoint.ptf(1.0, 1.0))
+    let m = geomxform.mapping(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), geomrect.of_xywh(0.0, 0.0, 128.0, 64.0))
+    let s = geomxform.scaling_about(2.0, 2.0, geompoint.ptf(3.0, 3.0))
+    let r = geomxform.scaled(geomxform.translated(geomxform.identity(), 1.0, 2.0), 3.0, 4.0)
+    var score = geomxform.apply_point(t, geompoint.ptf(1.0, 1.0)).x + geomxform.apply_vec(u, geompoint.vecf(1.0, 1.0)).dx
+    score = score + geomrect.width(geomxform.apply_rect(m, geomrect.of_xywh(0.0, 0.0, 0.5, 0.5)))
+    score = score + geomxform.determinant(s) + geomxform.invert(r).e + geomxform.of_matrix(1.0, 2.0, 3.0, 4.0, 5.0, 6.0).f
+    if geomxform.is_invertible(t) or geomxform.is_identity(u) or geomxform.is_translation(r)
+        score = score + 1.0
+    if geomxform.is_axis_aligned(m) or geomxform.near(t, u, 0.5)
+        score = score + 1.0
+    score
+
+fn main() [io]
+    let pts = [geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0)]
+    println(str.from_float(points() + rects(pts) + xforms()))

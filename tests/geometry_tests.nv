@@ -1,33 +1,19 @@
-// geometry_tests.nv — the API suite for points, vectors, sizes,
-// rectangles and transforms.
+// geometry_tests.nv — the suite for points, vectors, sizes, rectangles
+// and transforms: the three modules a device build uses.
 //
-// RED ON PURPOSE: every body is a `todo()`, so every case here reaches
-// `not implemented`.  What they are for is the shape — each one fixes
-// an input and an exact answer, so the implementation lane has a target
-// rather than a description.  Run with `--isolate` for one verdict per
-// `@test`.
+// The worked numbers are the 3-4-5 triangle, the unit square and the
+// quarter turn, so an expected answer can be checked without a
+// calculator.  The rectangle cases follow euclid's `Box2D` semantics
+// and the transform cases follow SVG's `matrix(a b c d e f)`.  The
+// property tests at the end check the algebraic laws the README states
+// over a few hundred rectangles and transforms drawn from a fixed
+// pseudo-random sequence.
 //
-// WHERE THE NUMBERS COME FROM.  The 3-4-5 triangle, the unit square and
-// the quarter turn, because an answer a reader can check without a
-// calculator is an answer a reviewer will actually check.  The
-// rectangle cases are euclid's `Box2D` semantics and the transform
-// cases are SVG's `matrix(a b c d e f)`, which are the two reference
-// implementations the README names.
-//
-// THE ROW ON EVERY `@test` IS `[io]`, for `test.case` and nothing else.
-// The package itself declares no effects anywhere, and that is the
-// claim this file's own row is evidence for: if any function here had
-// needed a clock or an allocator's failure path, this file would say
-// so.
-//
-// NO `==` ON A `@value` STRUCT.  The comparison operators reject one
-// (SPEC §14.5), and so does interpolating one into a string.  So every
-// assertion below reads a FIELD, or calls the package's own `near`.
-// That is not a workaround: comparing two Floats for exact equality is
-// the wrong test, and being unable to spell it is a small mercy.
+// No assertion compares two `@value` structs with `==`, because the
+// operator rejects them (SPEC section 14.5).  Each one reads a field or
+// calls the package's own `near`.
 
 use std.test
-use std.list
 use geompoint
 use geomrect
 use geomxform
@@ -46,29 +32,8 @@ fn test_a_vector_is_not_a_point() [io]
 
 @test
 fn test_the_three_four_five_triangle() [io]
-    test.case("length is the hypotenuse")
-    test.assert(geompoint.length(geompoint.vecf(3.0, 4.0)) == 5.0)
-
     test.case("length_sq takes no root")
     test.assert(geompoint.length_sq(geompoint.vecf(3.0, 4.0)) == 25.0)
-
-    test.case("distance is the length of the difference")
-    test.assert(geompoint.distance(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0)) == 5.0)
-
-    test.case("normalize scales to one")
-    let u = geompoint.normalize(geompoint.vecf(3.0, 4.0))
-    test.assert(u.dx == 0.6)
-    test.assert(u.dy == 0.8)
-
-@test
-fn test_the_zero_vector_normalizes_to_itself() [io]
-    test.case("no NaN comes out of a zero-length vector")
-    let z = geompoint.normalize(geompoint.zero_vec())
-    test.assert(z.dx == 0.0)
-    test.assert(z.dy == 0.0)
-
-    test.case("and its length is still zero")
-    test.assert(geompoint.length(z) == 0.0)
 
 @test
 fn test_dot_and_cross_read_the_angle() [io]
@@ -301,16 +266,14 @@ fn test_compose_reads_left_to_right() [io]
     test.assert(geomxform.apply_point(u, geompoint.ptf(1.0, 0.0)).x == 4.0)
 
 @test
-fn test_a_rotation_about_a_pivot_leaves_the_pivot_alone() [io]
-    test.case("the pivot is the fixed point")
-    let t = geomxform.rotation_about(1.5707963267948966, geompoint.ptf(5.0, 5.0))
-    test.assert(geompoint.near(geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)),
-                               geompoint.ptf(5.0, 5.0), 0.000001))
+fn test_about_keeps_its_pivot() [io]
+    test.case("a shear about a point leaves the point alone")
+    let t = geomxform.about(geomxform.shear(1.0, 0.0), geompoint.ptf(0.0, 2.0))
+    test.assert(geompoint.near(geomxform.apply_point(t, geompoint.ptf(0.0, 2.0)),
+                               geompoint.ptf(0.0, 2.0), 0.0))
 
-    test.case("a quarter turn takes positive x to positive y")
-    let q = geomxform.rotation(1.5707963267948966)
-    test.assert(geompoint.near(geomxform.apply_point(q, geompoint.ptf(1.0, 0.0)),
-                               geompoint.ptf(0.0, 1.0), 0.000001))
+    test.case("and moves the others by their distance from it")
+    test.assert(geomxform.apply_point(t, geompoint.ptf(0.0, 3.0)).x == 1.0)
 
 @test
 fn test_mapping_one_rectangle_onto_another() [io]
@@ -351,8 +314,12 @@ fn test_a_transformed_rectangle_is_a_bounding_box() [io]
     test.assert(geomrect.width(geomxform.apply_rect(geomxform.scaling(2.0, 2.0), r)) == 20.0)
 
     test.case("a quarter turn does too, being a multiple of a right angle")
-    let q = geomxform.rotation(1.5707963267948966)
-    test.assert(geomrect.width(geomxform.apply_rect(q, r)) - 10.0 < 0.000001)
+    let q = geomxform.of_matrix(0.0, 1.0, 0.0 - 1.0, 0.0, 0.0, 0.0)
+    test.assert(geomrect.width(geomxform.apply_rect(q, r)) == 10.0)
+    test.assert(geomxform.apply_rect(q, r).min.x == 0.0 - 10.0)
+
+    test.case("an empty rectangle stays empty")
+    test.assert(geomrect.is_empty(geomxform.apply_rect(q, geomrect.empty())))
 
     test.case("and the package says which transforms are safe to ask")
     test.assert(geomxform.is_axis_aligned(geomxform.scaling(2.0, 3.0)))
@@ -369,9 +336,6 @@ fn test_the_svg_matrix_spelling_is_the_field_order() [io]
     test.assert(t.e == 5.0)
     test.assert(t.f == 6.0)
 
-    test.case("and format_matrix writes the attribute svg-nv emits")
-    test.assert(geomxform.format_matrix(geomxform.identity()) == "matrix(1 0 0 1 0 0)")
-
 @test
 fn test_the_accumulating_forms() [io]
     test.case("translated is compose with a translation")
@@ -379,9 +343,6 @@ fn test_the_accumulating_forms() [io]
 
     test.case("scaled is compose with a scale")
     test.assert(geomxform.scaled(geomxform.identity(), 2.0, 2.0).a == 2.0)
-
-    test.case("rotated by nothing changes nothing")
-    test.assert(geomxform.is_identity(geomxform.rotated(geomxform.identity(), 0.0)))
 
     test.case("and shear puts the off-diagonal terms in")
     test.assert(geomxform.shear(1.0, 0.0).c == 1.0)
@@ -393,10 +354,6 @@ fn test_the_conversions_and_the_renderings() [io]
     test.assert(geompoint.vec_to_float(geompoint.veci(3, 4)).dx == 3.0)
     test.assert(geompoint.size_to_float(geompoint.sizei(16, 16)).w == 16.0)
     test.assert(geomrect.width(geomrect.to_float_rect(geomrect.of_xywh_i(0, 0, 16, 16))) == 16.0)
-
-    test.case("a @value struct cannot be interpolated, so the package renders it")
-    test.assert(geompoint.format(geompoint.ptf(1.5, 2.0)) == "(1.5, 2)")
-    test.assert(geomrect.format(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)) == "(0, 0, 10, 20)")
 
 @test
 fn test_the_remaining_constructors_and_readers() [io]
@@ -413,10 +370,6 @@ fn test_the_remaining_constructors_and_readers() [io]
     test.assert(geompoint.scale(geompoint.vecf(1.0, 2.0), 3.0).dy == 6.0)
     test.assert(geompoint.negate(geompoint.vecf(1.0, 2.0)).dx == 0.0 - 1.0)
     test.assert(geompoint.perpendicular(geompoint.vecf(1.0, 0.0)).dy == 1.0)
-
-    test.case("angles round-trip through the unit circle")
-    test.assert(geompoint.angle_of(geompoint.vecf(1.0, 0.0)) == 0.0)
-    test.assert(geompoint.from_angle(0.0).dx == 1.0)
 
     test.case("midpoint, distance_sq and near")
     test.assert(geompoint.midpoint(geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0)).x == 2.0)
@@ -440,14 +393,13 @@ fn test_the_rectangle_spellings_all_agree() [io]
 
     test.case("normalize makes every empty rectangle the same one")
     let e = geomrect.normalize(geomrect.of_xywh(5.0, 5.0, 0.0 - 1.0, 0.0 - 1.0))
-    test.assert(e.min.x == 0.0)
+    let f = geomrect.normalize(geomrect.intersection(geomrect.of_xywh(0.0, 0.0, 1.0, 1.0), geomrect.of_xywh(9.0, 9.0, 1.0, 1.0)))
+    test.assert(e.min.x == f.min.x and e.max.y == f.max.y)
+    test.assert(e.min.x == geomrect.empty().min.x)
     test.assert(geomrect.is_empty_i(geomrect.empty_i()))
 
     test.case("translate moves both corners")
     test.assert(geomrect.translate(c, geompoint.vecf(5.0, 0.0)).min.x == 6.0)
-
-    test.case("corners come out in winding order, four of them")
-    test.assert(list.len(geomrect.corners(c)) == 4)
 
     test.case("union_i and contains_rect_i are the grid spellings")
     let f = geomrect.of_xywh_i(0, 0, 1, 1)
@@ -455,16 +407,251 @@ fn test_the_rectangle_spellings_all_agree() [io]
     test.assert(geomrect.contains_rect_i(geomrect.of_xywh_i(0, 0, 16, 16), f))
 
 @test
-fn test_apply_points_walks_a_whole_list() [io]
-    test.case("every point goes through the same transform")
-    let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 1.0)]
-    let out = geomxform.apply_points(geomxform.translation(5.0, 0.0), ps)
-    test.assert(list.len(out) == 2)
-
-    test.case("and the list keeps its order")
-    test.assert(out[0].x == 5.0)
-    test.assert(out[1].x == 6.0)
-
+fn test_scaling_about_leaves_its_pivot_alone() [io]
     test.case("scaling_about leaves its pivot alone")
     let t = geomxform.scaling_about(2.0, 2.0, geompoint.ptf(5.0, 5.0))
     test.assert(geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)).x == 5.0)
+
+@test
+fn test_the_edges_of_every_rectangle_function() [io]
+    let e = geomrect.empty()
+
+    test.case("an empty rectangle has no centre, no fractions and no clamp")
+    test.assert(geomrect.center(e).x == 0.0)
+    test.assert(geomrect.relative(e, geompoint.ptf(3.0, 3.0)).x == 0.0)
+    test.assert(geomrect.absolute(e, geompoint.ptf(0.5, 0.5)).y == 0.0)
+    test.assert(geomrect.clamp_point(e, geompoint.ptf(3.0, 3.0)).x == 0.0)
+
+    test.case("inflating or insetting an empty rectangle leaves it empty")
+    test.assert(geomrect.is_empty(geomrect.inflate(e, 100.0, 100.0)))
+    test.assert(geomrect.is_empty(geomrect.inset(geomrect.of_xywh(5.0, 5.0, 0.0 - 3.0, 1.0), 0.0 - 9.0, 0.0, 0.0 - 9.0, 0.0)))
+
+    test.case("an empty rectangle has no pixels, inner or outer")
+    test.assert(geomrect.is_empty_i(geomrect.to_int_outer(e)))
+    test.assert(geomrect.is_empty_i(geomrect.to_int_inner(e)))
+
+    test.case("outer rounds a negative corner down and inner rounds it up")
+    let neg = geomrect.of_xywh(0.0 - 1.5, 0.0 - 1.5, 1.0, 1.0)
+    test.assert(geomrect.to_int_outer(neg).min.x == 0 - 2)
+    test.assert(geomrect.to_int_inner(neg).min.x == 0 - 1)
+    test.assert(geomrect.to_int_outer(neg).max.x == 0)
+
+    test.case("union ignores an empty operand on either side")
+    let r = geomrect.of_xywh(1.0, 1.0, 2.0, 2.0)
+    test.assert(geomrect.union(r, e).min.x == 1.0)
+
+    test.case("an empty inner rectangle is inside everything")
+    test.assert(geomrect.contains_rect(e, e))
+    test.assert(geomrect.contains_rect_i(geomrect.empty_i(), geomrect.empty_i()))
+
+    test.case("the grid union ignores an empty operand on either side")
+    let g = geomrect.of_xywh_i(2, 2, 3, 3)
+    test.assert(geomrect.union_i(geomrect.empty_i(), g).min.x == 2)
+    test.assert(geomrect.union_i(g, geomrect.empty_i()).max.x == 5)
+    test.assert(geomrect.area_i(geomrect.of_xywh_i(0, 0, 0 - 4, 4)) == 0)
+
+    test.case("a bounding box keeps its first point when the second arrives")
+    var box = geomrect.extend(e, geompoint.ptf(0.0, 0.0))
+    box = geomrect.extend(box, geompoint.ptf(3.0, 4.0))
+    test.assert(box.min.x == 0.0)
+    test.assert(box.max.y == 4.0)
+
+    test.case("a normalized rectangle that is not empty is unchanged")
+    test.assert(geomrect.normalize(r).max.x == 3.0)
+
+@test
+fn test_rounding_negative_halves_away_from_zero() [io]
+    test.case("-2.5 rounds to -3 and -2.4 to -2")
+    test.assert(geompoint.to_int_round(geompoint.ptf(0.0 - 2.5, 0.0 - 2.4)).x == 0 - 3)
+    test.assert(geompoint.to_int_round(geompoint.ptf(0.0 - 2.5, 0.0 - 2.4)).y == 0 - 2)
+
+    test.case("a whole negative number floors to itself")
+    test.assert(geompoint.to_int_floor(geompoint.ptf(0.0 - 2.0, 0.0)).x == 0 - 2)
+
+@test
+fn test_the_edges_of_every_transform_function() [io]
+    test.case("a transform with a negative determinant is invertible")
+    let mirror = geomxform.scaling(0.0 - 1.0, 1.0)
+    test.assert(geomxform.is_invertible(mirror))
+    test.assert(geomxform.determinant(mirror) == 0.0 - 1.0)
+
+    test.case("its inverse is itself")
+    test.assert(geomxform.near(geomxform.invert(mirror), mirror, 0.0))
+
+    test.case("a very small scale is still invertible, the test being relative")
+    test.assert(geomxform.is_invertible(geomxform.scaling(0.0000001, 0.0000001)))
+
+    test.case("the inverse of a translation moves back")
+    let back = geomxform.invert(geomxform.translation(5.0, 7.0))
+    test.assert(back.e == 0.0 - 5.0)
+    test.assert(back.f == 0.0 - 7.0)
+
+    test.case("near fails when any one entry differs")
+    let t = geomxform.of_matrix(1.0, 0.0, 0.0, 1.0, 0.0, 0.5)
+    test.assert(geomxform.near(t, geomxform.identity(), 0.1) == false)
+    test.assert(geomxform.is_identity(t) == false)
+
+    test.case("a scale is not the identity")
+    test.assert(geomxform.is_identity(geomxform.scaling(2.0, 1.0)) == false)
+
+    test.case("a shear is not axis-aligned")
+    test.assert(geomxform.is_axis_aligned(geomxform.shear(0.0, 1.0)) == false)
+
+// A fixed pseudo-random sequence: the multiplier and increment of the
+// C standard's example `rand`, modulo 2 to the 31st.  The same seed
+// gives the same cases on every run.
+fn next_seed(seed: Int) -> Int
+    (seed * 1103515245 + 12345) % 2147483648
+
+// A small whole number in `-8 ..= 8` from a seed.  Small whole numbers
+// keep every sum and product below exact and make `==` the right test.
+fn small(seed: Int) -> Float
+    (seed / 65536 % 17 - 8) as Float
+
+// A rectangle from four consecutive draws, which is empty whenever a
+// draw for the size is not positive.
+fn rect_from(seed: Int) -> GeomRectF
+    let s1 = next_seed(seed)
+    let s2 = next_seed(s1)
+    let s3 = next_seed(s2)
+    let s4 = next_seed(s3)
+    geomrect.of_xywh(small(s1), small(s2), small(s3), small(s4))
+
+fn same_rect(a: GeomRectF, b: GeomRectF) -> Bool
+    a.min.x == b.min.x and a.min.y == b.min.y and a.max.x == b.max.x and a.max.y == b.max.y
+
+@test
+fn test_the_rectangle_laws_hold_over_many_cases() [io]
+    var seed = 20260927
+    var ok_commute = true
+    var ok_contain = true
+    var ok_intersects = true
+    var ok_area = true
+    var ok_points = true
+    var ok_assoc = true
+    for k in 0..400
+        let a = rect_from(seed)
+        seed = next_seed(next_seed(next_seed(next_seed(seed))))
+        let b = rect_from(seed)
+        seed = next_seed(next_seed(next_seed(next_seed(seed))))
+        let c = rect_from(seed)
+        seed = next_seed(next_seed(next_seed(next_seed(seed))))
+        let u = geomrect.union(a, b)
+        let i = geomrect.intersection(a, b)
+        if not same_rect(u, geomrect.union(b, a)) and not geomrect.is_empty(u)
+            ok_commute = false
+        if not same_rect(i, geomrect.intersection(b, a))
+            ok_commute = false
+        if not (geomrect.contains_rect(u, a) and geomrect.contains_rect(u, b))
+            ok_contain = false
+        if not (geomrect.contains_rect(a, i) and geomrect.contains_rect(b, i))
+            ok_contain = false
+        if geomrect.intersects(a, b) == geomrect.is_empty(i)
+            ok_intersects = false
+        if geomrect.area(i) > geomrect.area(a) or geomrect.area(i) > geomrect.area(b)
+            ok_area = false
+        if geomrect.area(u) < geomrect.area(a) + geomrect.area(b) - geomrect.area(i)
+            ok_area = false
+        let p = geompoint.ptf(small(seed), small(next_seed(seed)))
+        seed = next_seed(next_seed(seed))
+        let in_both = geomrect.contains_point(a, p) and geomrect.contains_point(b, p)
+        if geomrect.contains_point(i, p) != in_both
+            ok_points = false
+        let left = geomrect.intersection(geomrect.intersection(a, b), c)
+        let right = geomrect.intersection(a, geomrect.intersection(b, c))
+        if not same_rect(left, right)
+            ok_assoc = false
+
+    test.case("union and intersection are commutative")
+    test.assert(ok_commute)
+
+    test.case("a union contains both operands, and both contain the intersection")
+    test.assert(ok_contain)
+
+    test.case("intersects is the same question as a non-empty intersection")
+    test.assert(ok_intersects)
+
+    test.case("an intersection is no larger than either operand, a union no smaller than both less the overlap")
+    test.assert(ok_area)
+
+    test.case("a point is in the intersection exactly when it is in both")
+    test.assert(ok_points)
+
+    test.case("intersection is associative")
+    test.assert(ok_assoc)
+
+// A transform with small whole entries, so composing two of them is
+// exact.
+fn xform_from(seed: Int) -> GeomXform
+    var s = seed
+    s = next_seed(s)
+    let a = small(s)
+    s = next_seed(s)
+    let b = small(s)
+    s = next_seed(s)
+    let c = small(s)
+    s = next_seed(s)
+    let d = small(s)
+    s = next_seed(s)
+    let e = small(s)
+    s = next_seed(s)
+    geomxform.of_matrix(a, b, c, d, e, small(s))
+
+fn same_xform(a: GeomXform, b: GeomXform) -> Bool
+    geomxform.near(a, b, 0.0)
+
+@test
+fn test_the_transform_laws_hold_over_many_cases() [io]
+    var seed = 7
+    var ok_order = true
+    var ok_assoc = true
+    var ok_det = true
+    var ok_inverse = true
+    var ok_identity = true
+    var ok_vec = true
+    for k in 0..300
+        let s = xform_from(seed)
+        let t = xform_from(seed + 1)
+        let u = xform_from(seed + 2)
+        seed = next_seed(seed)
+        let p = geompoint.ptf(small(seed), small(next_seed(seed)))
+        let q = geompoint.ptf(small(next_seed(seed) + 3), small(seed + 5))
+        let two = geomxform.apply_point(t, geomxform.apply_point(s, p))
+        let one = geomxform.apply_point(geomxform.compose(s, t), p)
+        if not geompoint.near(one, two, 0.0)
+            ok_order = false
+        let left = geomxform.compose(geomxform.compose(s, t), u)
+        let right = geomxform.compose(s, geomxform.compose(t, u))
+        if not same_xform(left, right)
+            ok_assoc = false
+        let det = geomxform.determinant(geomxform.compose(s, t))
+        if det != geomxform.determinant(s) * geomxform.determinant(t)
+            ok_det = false
+        if geomxform.is_invertible(s)
+            let round = geomxform.compose(s, geomxform.invert(s))
+            if not geomxform.near(round, geomxform.identity(), 0.000000001)
+                ok_inverse = false
+        if not same_xform(geomxform.compose(geomxform.identity(), s), s)
+            ok_identity = false
+        let dv = geomxform.apply_vec(s, geompoint.between(p, q))
+        let dp = geompoint.between(geomxform.apply_point(s, p), geomxform.apply_point(s, q))
+        if dv.dx != dp.dx or dv.dy != dp.dy
+            ok_vec = false
+
+    test.case("compose(first, second) applies first and then second")
+    test.assert(ok_order)
+
+    test.case("composition is associative")
+    test.assert(ok_assoc)
+
+    test.case("the determinant of a composition is the product of the determinants")
+    test.assert(ok_det)
+
+    test.case("an invertible transform composed with its inverse is the identity")
+    test.assert(ok_inverse)
+
+    test.case("the identity is neutral")
+    test.assert(ok_identity)
+
+    test.case("a transformed displacement is the displacement of the transformed points")
+    test.assert(ok_vec)

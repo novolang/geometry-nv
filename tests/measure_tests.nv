@@ -1,0 +1,95 @@
+// measure_tests.nv — the suite for `geomtrig` and `geomtext`: lengths,
+// angles, rotations and the text forms.
+//
+// These are the modules that call the C maths library or build text,
+// and so are left out of the build for a microcontroller.  The worked
+// numbers are the 3-4-5 triangle and the quarter turn.
+
+use std.test
+use std.math
+use geompoint
+use geomrect
+use geomxform
+use geomtrig
+use geomtext
+
+@test
+fn test_the_three_four_five_triangle() [io]
+    test.case("length is the hypotenuse")
+    test.assert(geomtrig.length(geompoint.vecf(3.0, 4.0)) == 5.0)
+
+    test.case("distance is the length of the difference")
+    test.assert(geomtrig.distance(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0)) == 5.0)
+
+    test.case("normalize scales to one")
+    let u = geomtrig.normalize(geompoint.vecf(3.0, 4.0))
+    test.assert(u.dx == 0.6)
+    test.assert(u.dy == 0.8)
+
+@test
+fn test_the_zero_vector_normalizes_to_itself() [io]
+    test.case("no NaN comes out of a zero-length vector")
+    let z = geomtrig.normalize(geompoint.zero_vec())
+    test.assert(z.dx == 0.0)
+    test.assert(z.dy == 0.0)
+
+    test.case("and its length is still zero")
+    test.assert(geomtrig.length(z) == 0.0)
+
+@test
+fn test_angles_round_trip_through_the_unit_circle() [io]
+    test.case("positive x is angle zero")
+    test.assert(geomtrig.angle_of(geompoint.vecf(1.0, 0.0)) == 0.0)
+    test.assert(geomtrig.from_angle(0.0).dx == 1.0)
+
+    test.case("positive y is a quarter turn")
+    test.assert(geomtrig.angle_of(geompoint.vecf(0.0, 2.0)) == math.pi() / 2.0)
+
+    test.case("negative x is pi, never -pi")
+    test.assert(geomtrig.angle_of(geompoint.vecf(0.0 - 1.0, 0.0)) == math.pi())
+    test.assert(geomtrig.angle_of(geompoint.vecf(0.0 - 1.0, (0.0 - 1.0) * 0.0)) == math.pi())
+
+    test.case("the zero vector points nowhere and answers zero")
+    test.assert(geomtrig.angle_of(geompoint.zero_vec()) == 0.0)
+
+    test.case("from_angle then angle_of gives the angle back")
+    test.assert(geomtrig.angle_of(geomtrig.from_angle(1.0)) - 1.0 < 0.000000000001)
+
+@test
+fn test_a_rotation_about_a_pivot_leaves_the_pivot_alone() [io]
+    test.case("the pivot is the fixed point")
+    let t = geomtrig.rotation_about(1.5707963267948966, geompoint.ptf(5.0, 5.0))
+    test.assert(geompoint.near(geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)),
+                               geompoint.ptf(5.0, 5.0), 0.000001))
+
+    test.case("a quarter turn takes positive x to positive y")
+    let q = geomtrig.rotation(1.5707963267948966)
+    test.assert(geompoint.near(geomxform.apply_point(q, geompoint.ptf(1.0, 0.0)),
+                               geompoint.ptf(0.0, 1.0), 0.000001))
+
+    test.case("and is not axis-aligned in the exact sense")
+    test.assert(geomxform.is_axis_aligned(q) == false)
+
+    test.case("its bounding box of a square is the same size, to rounding")
+    let r = geomrect.of_xywh(0.0, 0.0, 10.0, 10.0)
+    test.assert(geomrect.width(geomxform.apply_rect(q, r)) - 10.0 < 0.000001)
+
+    test.case("rotated by nothing changes nothing")
+    test.assert(geomxform.is_identity(geomtrig.rotated(geomxform.identity(), 0.0)))
+
+    test.case("two eighth turns make a quarter turn")
+    let eighth = math.pi() / 4.0
+    let two = geomtrig.rotated(geomtrig.rotation(eighth), eighth)
+    test.assert(geomxform.near(two, q, 0.000000000001))
+
+@test
+fn test_the_text_forms() [io]
+    test.case("a point is written as (x, y), whole numbers without a fraction")
+    test.assert(geomtext.format_point(geompoint.ptf(1.5, 2.0)) == "(1.5, 2)")
+
+    test.case("a rectangle as its low corner, width and height")
+    test.assert(geomtext.format_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)) == "(0, 0, 10, 20)")
+
+    test.case("a transform as SVG's matrix attribute")
+    test.assert(geomtext.format_matrix(geomxform.identity()) == "matrix(1 0 0 1 0 0)")
+    test.assert(geomtext.format_matrix(geomxform.of_matrix(1.0, 2.0, 3.0, 4.0, 5.5, 0.0 - 6.0)) == "matrix(1 2 3 4 5.5 -6)")

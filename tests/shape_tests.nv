@@ -1,18 +1,11 @@
-// shape_tests.nv — the API suite for polygons and rectangle packing.
+// shape_tests.nv — the suite for polygons, the list forms and
+// rectangle packing: the modules that hold a list.
 //
-// RED ON PURPOSE: every body is a `todo()`.
-//
-// THE TWO MODULES ARE HERE TOGETHER because they share what separates
-// them from the rest of the package: both hold a LIST, so both are
-// boxed, and neither is in the embedded probe's transitive closure.
-// Everything in `geometry_tests.nv` is unboxed arithmetic that a device
-// runs; everything here allocates.
-//
-// WHERE THE NUMBERS COME FROM.  The unit square and the 3-4-5 triangle
-// again, whose areas are 1 and 6 and whose perimeters are 4 and 12.
-// The packing cases are worked by hand from the shelf rule stated in
-// `geompack`'s header — three sentences, so a reader can check every
-// expected coordinate against them without running anything.
+// The worked numbers are the unit square and the 3-4-5 triangle, whose
+// areas are 1 and 6 and whose perimeters are 4 and 12.  The packing
+// cases are worked by hand from the shelf rule in `geompack`'s header,
+// so every expected coordinate can be checked without running
+// anything.
 
 use std.test
 use std.list
@@ -20,6 +13,7 @@ use geompoint
 use geomrect
 use geompoly
 use geompack
+use geomxform
 
 @test
 fn test_a_ring_is_closed_implicitly() [io]
@@ -354,3 +348,139 @@ fn test_a_bin_can_be_emptied_and_read_back() [io]
 
     test.case("and an index past the end answers a failed placement")
     test.assert(geompack.placement_at(c, 99).ok == false)
+
+@test
+fn test_the_list_forms_of_rectangles_and_transforms() [io]
+    test.case("a rectangle's corners come out in winding order, four of them")
+    let c = geompoly.corners(geomrect.of_xywh(1.0, 2.0, 10.0, 20.0))
+    test.assert(list.len(c) == 4)
+    test.assert(c[1].x == 11.0)
+    test.assert(c[3].y == 22.0)
+
+    test.case("every point goes through the same transform")
+    let ps = [geompoint.ptf(0.0, 0.0), geompoint.ptf(1.0, 1.0)]
+    let out = geompoly.apply_points(geomxform.translation(5.0, 0.0), ps)
+    test.assert(list.len(out) == 2)
+
+    test.case("and the list keeps its order")
+    test.assert(out[0].x == 5.0)
+    test.assert(out[1].x == 6.0)
+
+@test
+fn test_the_edges_of_every_packing_function() [io]
+    test.case("a bin nothing was placed in has no last placement")
+    test.assert(geompack.last_placement(geompack.bin(8, 8)).ok == false)
+
+    test.case("a bin with no area is neither full nor free")
+    let flat = geompack.bin(0, 10)
+    test.assert(geompack.occupancy(flat) == 0.0)
+    test.assert(geompack.free_area(flat) == 0)
+
+    test.case("the square page of nothing is zero, and of a 40 by 70 sheet is 128")
+    test.assert(geompack.square_page_size(geompack.bin(256, 256)) == 0)
+    test.assert(geompack.square_page_size(geompack.place(geompack.bin(256, 256), 40, 70)) == 128)
+
+    test.case("a failed placement has no texture coordinates")
+    let full = geompack.place(geompack.bin(10, 10), 20, 20)
+    test.assert(geomrect.is_empty(geompack.uv_of(full, geompack.last_placement(full))))
+
+    test.case("a rectangle taller than the space below the last shelf does not fit")
+    var b = geompack.bin(10, 10)
+    b = geompack.place(b, 10, 6)
+    b = geompack.place(b, 5, 5)
+    test.assert(geompack.last_placement(b).ok == false)
+    test.assert(geompack.shelf_count(b) == 1)
+
+    test.case("a rectangle with no area has nothing to place")
+    test.assert(geompack.would_fit(geompack.bin(10, 10), 0, 5) == false)
+
+    test.case("placing into a bin leaves the bin it was given unchanged")
+    let before = geompack.bin(10, 10)
+    let after = geompack.place(before, 5, 5)
+    test.assert(geompack.placed_count(before) == 0)
+    test.assert(geompack.placed_count(after) == 1)
+
+@test
+fn test_the_edges_of_every_polygon_function() [io]
+    test.case("each fault prints the constraint that was not met")
+    test.assert(GeomTooFewPoints.message() == "a polygon needs at least three vertices")
+    test.assert(GeomNonPositiveExtent.message() == "an extent, a radius or a side count must be positive")
+
+    test.case("an empty rectangle gives a ring with no vertices")
+    test.assert(geompoly.vertex_count(geompoly.of_rect(geomrect.empty())) == 0)
+
+    test.case("a ring with no vertices has its centroid at the origin")
+    test.assert(geompoly.centroid(geompoly.empty()).x == 0.0)
+
+    test.case("a ring with no area has its centroid at the vertex average")
+    let line = geompoly.of_points_unchecked([geompoint.ptf(0.0, 0.0), geompoint.ptf(2.0, 0.0), geompoint.ptf(4.0, 0.0)])
+    test.assert(geompoly.centroid(line).x == 2.0)
+
+    test.case("two vertices are not convex, and nor is a straight line")
+    test.assert(geompoly.is_convex(geompoly.of_points_unchecked([geompoint.origin(), geompoint.ptf(1.0, 0.0)])) == false)
+    test.assert(geompoly.is_convex(line) == false)
+
+    test.case("a star turns the same way at every vertex and is still not convex")
+    let star = geompoly.of_points_unchecked([
+        geompoint.ptf(0.0, 1.0),
+        geompoint.ptf(0.5878, 0.0 - 0.809),
+        geompoint.ptf(0.0 - 0.951, 0.309),
+        geompoint.ptf(0.951, 0.309),
+        geompoint.ptf(0.0 - 0.5878, 0.0 - 0.809)])
+    test.assert(geompoly.is_convex(star) == false)
+
+    test.case("a ring with no vertices has no boundary to be near")
+    test.assert(geompoly.distance_to_edge(geompoly.empty(), geompoint.origin()) > 1000000.0)
+
+    test.case("the closest point of a segment of zero length is its one point")
+    let a = geompoint.ptf(2.0, 2.0)
+    test.assert(geompoly.closest_on_segment(a, a, geompoint.origin()).x == 2.0)
+
+    test.case("the closest point before the start of a segment is the start")
+    test.assert(geompoly.closest_on_segment(a, geompoint.ptf(4.0, 2.0), geompoint.origin()).x == 2.0)
+
+    test.case("segments that touch at an end cross, and so do overlapping collinear ones")
+    test.assert(geompoly.segments_cross(geompoint.origin(), a, a, geompoint.ptf(4.0, 0.0)))
+    test.assert(geompoly.segments_cross(geompoint.origin(), a, geompoint.ptf(1.0, 1.0), geompoint.ptf(3.0, 3.0)))
+
+    test.case("oriented leaves a degenerate ring alone, and a request for no direction too")
+    test.assert(geompoly.vertex_count(geompoly.oriented(line, GeomClockwise)) == 3)
+    let tri = geompoly.of_points_unchecked([geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)])
+    test.assert(geompoly.winding(geompoly.oriented(tri, GeomDegenerate)) == GeomCounterClockwise)
+
+    test.case("vertex_at refuses a negative index with the origin")
+    test.assert(geompoly.vertex_at(tri, 0 - 1).x == 0.0)
+
+    test.case("a polygon keeps its own copy of the list it was made from")
+    var pts = [geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0), geompoint.ptf(0.0, 3.0)]
+    let kept = geompoly.of_points_unchecked(pts)
+    pts[0] = geompoint.ptf(9.0, 9.0)
+    test.assert(geompoly.vertex_at(kept, 0).x == 0.0)
+
+@test
+fn test_simplify_keeps_the_corners_of_a_detailed_ring() [io]
+    test.case("a square traced with extra points along every side keeps its four corners")
+    var pts: [GeomPointF] = []
+    for i in 0..10
+        list.push(pts, geompoint.ptf(i as Float, 0.0))
+    for i in 0..10
+        list.push(pts, geompoint.ptf(10.0, i as Float))
+    for i in 0..10
+        list.push(pts, geompoint.ptf(10.0 - i as Float, 10.0))
+    for i in 0..10
+        list.push(pts, geompoint.ptf(0.0, 10.0 - i as Float))
+    let ring = geompoly.of_points_unchecked(pts)
+    let s = geompoly.simplify(ring, 0.01)
+    test.assert(geompoly.vertex_count(s) == 4)
+    test.assert(geompoly.area(s) == 100.0)
+
+    test.case("a zigzag deeper than two levels keeps every tooth above the tolerance")
+    var zig: [GeomPointF] = []
+    for i in 0..9
+        var y = 0.0
+        if i % 2 == 1
+            y = 1.0
+        list.push(zig, geompoint.ptf(i as Float, y))
+    list.push(zig, geompoint.ptf(8.0, 0.0 - 5.0))
+    let z = geompoly.simplify(geompoly.of_points_unchecked(zig), 0.5)
+    test.assert(geompoly.vertex_count(z) == 10)
