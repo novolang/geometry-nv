@@ -10,11 +10,6 @@ uses. Three other packages on the registry are built on it:
 [font-nv](https://novo-lang.org/packages/font-nv) and
 [raster-nv](https://novo-lang.org/packages/raster-nv).
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is declared with
-its full signature, but every body is a `todo()` that panics when called. The
-package is published so its design can be reviewed and depended on before it
-is implemented. Version 0.1.0 will be the first working release.
-
 ## What it is
 
 A **point** is a position. A **vector** is a displacement from one position to
@@ -33,7 +28,8 @@ A **rectangle** here is axis-aligned and stored as two corners, a low one and
 a high one. That is euclid's `Box2D` rather than its `Rect`, which holds an
 origin and a size. The corner form is what the algebra wants: a union is a
 minimum and a maximum per axis, an intersection is a maximum and a minimum,
-and containment is four comparisons.
+and containment is four comparisons. A rectangle whose low corner is not below
+its high corner on some axis is **empty**: it encloses nothing.
 
 An **affine transform** of the plane is a 3 by 3 matrix whose bottom row is
 always zero, zero, one. `GeomXform` stores the six numbers that vary, in the
@@ -60,7 +56,7 @@ rectangle goes on the first band tall enough to take it.
 | Numbers a shelf carries | 3 |
 | Vertices the smallest polygon may have | 3 |
 | Fill rules | 2 |
-| Modules that build for a microcontroller | 3 of 5 |
+| Modules that build for a microcontroller | 3 of 7 |
 
 ## Install
 
@@ -74,6 +70,7 @@ novo pkg add geometry-nv
 use geompoint
 use geomrect
 use geomxform
+use geomtext
 
 fn main() [io]
     // The pixel rectangle a chart is drawn into: a 640 by 480 canvas with
@@ -91,24 +88,21 @@ fn main() [io]
     let to_pixels = geomxform.mapping(geomrect.of_xywh(0.0, 0.0, 100.0, 1.0),
                                       flipped)
 
-    // Where the data point (50, 0.5) lands on the canvas.
-    println(geompoint.format(geomxform.apply_point(to_pixels,
-                                                   geompoint.ptf(50.0, 0.5))))
+    // Where the data point (50, 0.5) lands on the canvas: (335, 230).
+    println(geomtext.format_point(geomxform.apply_point(to_pixels,
+                                                        geompoint.ptf(50.0, 0.5))))
 ```
-
-Build and test with `novo pkg build` and `novo test`. Today `novo test` fails
-on purpose: every test reaches a `not implemented: geometry-nv.<module>.<fn>`
-panic. The tests are the specification the implementation will have to
-satisfy.
 
 ## What the package contains
 
 | Module | Contents |
 | --- | --- |
-| `geompoint` | Points, vectors and sizes in both flavours, the vector algebra over them, the distance and interpolation functions, and the conversions between the two flavours. |
-| `geomrect` | Rectangles in both flavours, the union, intersection and containment algebra, the inset, inflate and translate operations, and the conversions to and from the integer grid. |
-| `geomxform` | Affine transforms: the constructors, composition, application to a point, a vector, a rectangle or a list, the determinant, inversion, and the predicates that describe a transform's shape. |
-| `geompoly` | One closed ring: its area, perimeter, winding, centroid, bounds and convexity, containment under both fill rules, simplification, and the two segment functions the containment test is built on. |
+| `geompoint` | Points, vectors and sizes in both flavours, the vector algebra over them, the squared length and distance, interpolation, and the conversions between the two flavours. |
+| `geomrect` | Rectangles in both flavours, the union, intersection and containment algebra, the inset, inflate and translate operations, the bounding box of a list of points, and the conversions to and from the integer grid. |
+| `geomxform` | Affine transforms: the constructors, composition, application to a point, a vector or a rectangle, the determinant, inversion, and the predicates that describe a transform's shape. |
+| `geomtrig` | The functions that take a square root or an angle: length, distance, unit vectors, and the rotations. |
+| `geomtext` | Points, rectangles and transforms written out as text, the last as SVG's `matrix(a b c d e f)`. |
+| `geompoly` | One closed ring: its area, perimeter, winding, centroid, bounds and convexity, containment under both fill rules, simplification, and the two segment functions the containment test is built on. It also holds the two functions whose answer is a list of points: a rectangle's corners and a list sent through a transform. |
 | `geompack` | A bin being packed: placing one rectangle or many, the two orderings, the counts and the occupancy, the texture coordinates of a placement, and the smallest square page that would hold the result. |
 
 ## How to choose an entry point
@@ -126,8 +120,9 @@ right.
 that may enclose nothing, and `is_empty` is the question about it.
 
 **`geompack.place` is the way in for an atlas built as it is read.** It takes
-one rectangle and answers the bin, so a caller streaming glyphs out of a font
-never holds them all. `place_all` is the whole-list form.
+one rectangle and answers a new bin, so a caller streaming glyphs out of a font
+never holds them all. Each call copies the placements made so far.
+`place_all` is the whole-list form, and copies once.
 
 **`geompoly.contains` is the way in for hit testing.** It takes the fill rule,
 because the two rules disagree on a self-intersecting ring.
@@ -143,15 +138,17 @@ because the two rules disagree on a self-intersecting ring.
    column-vector convention taught in linear algebra would make the same call
    mean "second, then first". There is no second spelling of this function.
 3. **An empty rectangle is a value, not an error.** `intersection` answers a
-   rectangle whose low corner is above its high corner, and `is_empty` says
+   rectangle whose low corner is not below its high corner, and `is_empty` says
    so. A clip coming back empty is the ordinary outcome, not a failure. Every
    function here is defined on an empty rectangle: its union with another
-   rectangle is the other one, its intersection with anything is empty, and
-   `contains_point` is false.
+   rectangle is the other one, its intersection with anything is empty,
+   `contains_point` is false, and `center` answers the origin.
 4. **`empty()` is the canonical empty rectangle and `normalize` produces it.**
-   Two empty rectangles from different clips hold different coordinates until
-   one of them is normalized. Nothing normalizes for the caller, because it
-   costs four comparisons and most callers only ask `is_empty`.
+   Its low corner is at positive infinity and its high corner at negative
+   infinity, so it holds no point, and a bounding box folded with `extend`
+   from it starts at the first point. Two empty rectangles from different clips
+   hold different coordinates until they are normalized. Nothing normalizes for
+   the caller.
 5. **Containment is half-open.** A point on a low edge is inside, and a point
    on a high edge is outside. That is what makes two rectangles sharing an
    edge cover each pixel once.
@@ -182,14 +179,14 @@ because the two rules disagree on a self-intersecting ring.
 13. **Comparing two of these values with `==` is rejected, and so is
     interpolating one into a string.** SPEC section 14.5 keeps the comparison
     operators off an unboxed struct. `geompoint.near` and `geomxform.near`
-    take an epsilon, `geompoint.format` and `geomrect.format` write a value
-    out, and `geomxform.format_matrix` writes SVG's own spelling. Comparing
-    two floats for exact equality was the wrong test anyway.
+    take an epsilon, and `geomtext` writes a value out, a transform in SVG's
+    own spelling.
 14. **Angles are in radians, measured from positive x toward positive y.**
-    `geompoint.angle_of`, `from_angle`, `geomxform.rotation` and
-    `rotation_about` all use them.
+    `geomtrig.angle_of` answers in `(-pi, pi]`, and `geomtrig.from_angle`,
+    `rotation` and `rotation_about` take the same measure.
 15. **`length_sq` and `distance_sq` take no square root.** They are the forms
-    a comparison wants. `length` and `distance` are for the number a reader
+    a comparison wants, and they build for a microcontroller.
+    `geomtrig.length` and `geomtrig.distance` are for the number a reader
     sees.
 16. **A function that can be asked an impossible question answers a value.**
     `geompoly.vertex_at` answers the origin for an index out of range,
@@ -197,32 +194,42 @@ because the two rules disagree on a self-intersecting ring.
     `geomrect.center` answers the origin for an empty rectangle. Only
     `geompoly.of_points` and `geompoly.regular` answer a `Result`, and
     `GeomFault` is why.
+17. **Converting to the grid stops the program on a coordinate that is not a
+    number or is outside the range of `Int`.** `to_int_floor`,
+    `to_int_round`, `to_int_outer` and `to_int_inner` convert with `as Int`,
+    which SPEC section 13.3 defines that way.
 
 ## Running on a microcontroller
 
 novo-lang lets a package state which of its modules can run on a device with
 no heap allocator, and the compiler checks that claim on every build. Here the
 claim covers `geompoint`, `geomrect` and `geomxform`: the point, rectangle and
-transform arithmetic.
+transform arithmetic. Every function in them is `@tier(embedded)`, so an
+allocation or a call into the C maths library written there is refused where
+it is written.
 
 ```bash
 novo build --target=nrf52-qemu tests/embedded_probe.nv
 ```
 
-That command builds today, and it is the whole of the claim. The probe is
-firmware that maps a viewport onto a 128 by 64 display, clips a widget
-rectangle against the screen, and measures a vector. Three unboxed structs
-cross four call boundaries in it and none of them is a pointer.
+The probe is firmware that maps a viewport onto a 128 by 64 display, clips a
+widget rectangle against the screen, measures a vector and undoes a scale. It
+boots under QEMU's `mps2-an386` machine and prints `PASS: geometry-embedded`
+when every answer is exact. `tests/alloc_scan.sh` reads the emitted LLVM of all
+three modules and finds no call to the allocator.
 
-`geompoly` and `geompack` are outside the claim. A ring's vertices and a bin's
-shelves are lists, and a list is a heap allocation. Both modules are pure and
-both have no effects, but neither is the part that runs in firmware.
+The other four modules are outside the claim. `geompoly` and `geompack` hold
+lists, and a list is a heap allocation. `geomtrig` calls `sqrt`, `sin`, `cos`
+and `atan2`, which a device without a double-precision floating-point unit
+takes from the C maths library, and `geomtext` builds text. All four are pure
+and have no effects. On a device, `length_sq` and `distance_sq` answer every
+comparison, and a rotation whose sine and cosine are known ahead of time is
+`geomxform.of_matrix(c, s, -s, c, 0, 0)`.
 
 What makes the claim possible is the unboxed layout. `@value` (SPEC section 14)
 lays these structs out with true field widths and passes them in registers, and
 a list of them is one flat buffer with no per-element cell and no per-element
-reference count (SPEC section 14.6). Boxed, every point would be a cell with a
-reference count and the probe would not link.
+reference count (SPEC section 14.6).
 
 ## What is not included
 
@@ -245,6 +252,8 @@ reference count and the probe would not link.
   keeps a segment list whose length grows with the width and the input.
 - **A `then` alias for `compose`.** `then` is a reserved word, because it
   separates an inline conditional's branches (SPEC section 1.3).
+- **A square root or a rotation by angle on a microcontroller.** Both need the
+  C maths library there; see the section above.
 - **Three-dimensional geometry, projections and perspective.** A camera with a
   tilt and a perspective divide is not an affine transform of the plane.
 - **Curves.** Béziers, arcs and their flattening live in
@@ -254,7 +263,7 @@ reference count and the probe would not link.
 
 - [svg-nv](https://novo-lang.org/packages/svg-nv) is the SVG document model.
   It takes its points and transforms from here, and
-  `geomxform.format_matrix` is the agreed spelling so the two packages cannot
+  `geomtext.format_matrix` is the agreed spelling so the two packages cannot
   disagree about argument order.
 - [font-nv](https://novo-lang.org/packages/font-nv) reads a font file. A glyph
   outline is expressed in these points, and a glyph atlas is packed with
@@ -269,7 +278,10 @@ reference count and the probe would not link.
 
 ```bash
 novo test tests/geometry_tests.nv   # points, vectors, sizes, rectangles, transforms
-novo test tests/shape_tests.nv      # polygons and rectangle packing
+novo test tests/measure_tests.nv    # lengths, angles, rotations, text forms
+novo test tests/shape_tests.nv      # polygons, the list forms, rectangle packing
+bash tests/coverage.sh              # line coverage over src/, merged across suites
+bash tests/alloc_scan.sh            # no allocation in the three device modules
 ```
 
 The reference implementations are euclid for the types and the transform
@@ -280,54 +292,16 @@ cases follow euclid's `Box2D` semantics and the transform cases follow SVG's
 
 The worked numbers are the unit square, the 3-4-5 triangle and the quarter
 turn, so a reviewer can check an expected answer without a calculator. The
-packing cases are worked by hand from the shelf rule. No assertion compares two
-unboxed structs with `==`, because the operator rejects one: each reads a field
-or calls the package's own `near`.
-
-The two files split on what the two halves of the package hold. Everything in
-`geometry_tests.nv` is unboxed arithmetic that a device runs. Everything in
-`shape_tests.nv` holds a list.
-
-The tests compile today and fail at run, each on the
-`not implemented: geometry-nv.<module>.<fn>` panic that is its body. That is
-the expected state of an interface release. They turn green one at a time as
-bodies land. `novo test --isolate tests/<file>` prints one verdict per test.
-
-## Implementation status
-
-| Item | Implemented |
-| --- | --- |
-| The six `geompoint` types, the two `geomrect` types, `GeomXform`, `GeomShelf`, `GeomPlacement` | the types are declared; nothing constructs one |
-| `GeomPoly`, `GeomBin`, `GeomWinding`, `GeomFillRule`, `GeomFault` | the types are declared; nothing constructs one |
-| `geompoint.ptf`, `.pti`, `.vecf`, `.veci`, `.sizef`, `.sizei`, `.origin`, `.zero_vec` | no |
-| `geompoint.offset`, `.between`, `.add`, `.sub`, `.scale`, `.negate` | no |
-| `geompoint.dot`, `.cross`, `.length`, `.length_sq`, `.normalize`, `.perpendicular` | no |
-| `geompoint.angle_of`, `.from_angle`, `.distance`, `.distance_sq`, `.lerp`, `.midpoint`, `.near` | no |
-| `geompoint.to_float`, `.to_int_floor`, `.to_int_round`, `.vec_to_float`, `.size_to_float` | no |
-| `geompoint.area_of`, `.area_of_i`, `.size_is_empty`, `.size_is_empty_i`, `.format` | no |
-| `geomrect.of_corners`, `.of_origin_size`, `.of_xywh`, `.of_corners_i`, `.of_xywh_i`, `.spanning` | no |
-| `geomrect.empty`, `.empty_i`, `.is_empty`, `.is_empty_i`, `.normalize` | no |
-| `geomrect.width`, `.height`, `.size_of`, `.area`, `.center`, `.width_i`, `.height_i`, `.area_i` | no |
-| `geomrect.contains_point`, `.contains_rect`, `.intersects`, `.intersection`, `.union` | no |
-| `geomrect.contains_point_i`, `.contains_rect_i`, `.intersection_i`, `.union_i` | no |
-| `geomrect.extend`, `.bounding`, `.translate`, `.inflate`, `.inset`, `.clamp_point`, `.corners` | no |
-| `geomrect.relative`, `.absolute`, `.to_int_outer`, `.to_int_inner`, `.to_float_rect`, `.format` | no |
-| `geomxform.identity`, `.of_matrix`, `.translation`, `.scaling`, `.rotation` | no |
-| `geomxform.rotation_about`, `.scaling_about`, `.shear`, `.mapping`, `.compose` | no |
-| `geomxform.translated`, `.scaled`, `.rotated` | no |
-| `geomxform.apply_point`, `.apply_vec`, `.apply_rect`, `.apply_points` | no |
-| `geomxform.determinant`, `.is_invertible`, `.invert` | no |
-| `geomxform.is_identity`, `.is_translation`, `.is_axis_aligned`, `.near`, `.format_matrix` | no |
-| `geompoly.of_points`, `.of_points_unchecked`, `.empty`, `.of_rect`, `.regular` | no |
-| `geompoly.vertex_count`, `.points_of`, `.vertex_at`, `.bounds` | no |
-| `geompoly.signed_area`, `.area`, `.perimeter`, `.winding`, `.oriented`, `.reversed`, `.centroid` | no |
-| `geompoly.contains`, `.is_convex`, `.translate`, `.simplify` | no |
-| `geompoly.distance_to_edge`, `.closest_on_segment`, `.segments_cross` | no |
-| `geompack.bin`, `.place`, `.place_all`, `.reset`, `.would_fit` | no |
-| `geompack.order_by_height`, `.order_by_area` | no |
-| `geompack.last_placement`, `.placements`, `.placement_at`, `.placed_count`, `.fitted_count` | no |
-| `geompack.shelf_count`, `.used_area`, `.free_area`, `.occupancy`, `.used_bounds` | no |
-| `geompack.square_page_size`, `.uv_of` | no |
+packing cases are worked by hand from the shelf rule. Two property tests check
+the laws over a few hundred cases drawn from a fixed pseudo-random sequence:
+for rectangles, that union and intersection commute, that intersection is
+associative, that a union contains both operands and both contain the
+intersection, and that a point is in the intersection exactly when it is in
+both; for transforms, that `compose` applies its first argument first, that
+composition is associative, that determinants multiply, and that a transform
+composed with its inverse is the identity. No assertion compares two unboxed
+structs with `==`, because the operator rejects one: each reads a field or
+calls the package's own `near`.
 
 ## Licence
 
