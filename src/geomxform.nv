@@ -332,16 +332,8 @@ fn determinant(t: GeomXform) -> Float
 // ```
 pub @tier(embedded)
 fn is_invertible(t: GeomXform) -> Bool
-    let m = math.max(math.max(magnitude(t.a), magnitude(t.b)), math.max(magnitude(t.c), magnitude(t.d)))
-    magnitude(determinant(t)) > m * m * 0.000000000001
-
-// `x` without its sign, written with a comparison so the device build
-// needs no absolute-value call.
-@tier(embedded)
-fn magnitude(x: Float) -> Float
-    if x < 0.0
-        return 0.0 - x
-    x
+    let m = math.max(math.max(math.abs(t.a), math.abs(t.b)), math.max(math.abs(t.c), math.abs(t.d)))
+    math.abs(determinant(t)) > m * m * 0.000000000001
 
 // The transform that undoes `t`, or the identity when `is_invertible`
 // is false.
@@ -422,5 +414,5 @@ fn is_axis_aligned(t: GeomXform) -> Bool
 // ```
 pub @tier(embedded)
 fn near(a: GeomXform, b: GeomXform, eps: Float) -> Bool
-    let linear = magnitude(a.a - b.a) <= eps and magnitude(a.b - b.b) <= eps and magnitude(a.c - b.c) <= eps and magnitude(a.d - b.d) <= eps
-    linear and magnitude(a.e - b.e) <= eps and magnitude(a.f - b.f) <= eps
+    let linear = math.abs(a.a - b.a) <= eps and math.abs(a.b - b.b) <= eps and math.abs(a.c - b.c) <= eps and math.abs(a.d - b.d) <= eps
+    linear and math.abs(a.e - b.e) <= eps and math.abs(a.f - b.f) <= eps

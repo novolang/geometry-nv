@@ -2,12 +2,10 @@
 // Int flavour, as unboxed values.
 //
 // There are two flavours rather than one generic `GeomPoint<T>`,
-// because a generic function whose return type applies a generic head
-// is not emitted for a call from another module on this toolchain, and
-// a library is nothing but those calls.  The division also matches a
-// real difference.  A Float point is a position in a continuous space
-// and an Int point is a pixel.  `to_int_floor` and `to_int_round` are
-// the places where a position becomes a pixel.
+// because the division matches a real difference.  A Float point is a
+// position in a continuous space and an Int point is a pixel.
+// `to_int_floor` and `to_int_round` are the places where a position
+// becomes a pixel.
 //
 // Every type here is `@value` (SPEC section 14).  It is laid out with
 // true field widths and passed in registers, and a `[GeomPointF]` is
@@ -23,6 +21,8 @@
 // arguments, with no allocation and no call into the C maths library.
 // The functions that need a square root or a trigonometric function
 // are in `geomtrig`, and the text renderings are in `geomtext`.
+
+use std.math
 
 // A position in continuous 2-D space.
 //
@@ -414,13 +414,7 @@ fn midpoint(a: GeomPointF, b: GeomPointF) -> GeomPointF
 // ```
 pub @tier(embedded)
 fn near(a: GeomPointF, b: GeomPointF, eps: Float) -> Bool
-    within(a.x - b.x, eps) and within(a.y - b.y, eps)
-
-// Whether `d` lies in `[-eps, eps]`.  Written with two comparisons, so
-// the device build needs no absolute-value call.
-@tier(embedded)
-fn within(d: Float, eps: Float) -> Bool
-    d <= eps and 0.0 - d <= eps
+    math.abs(a.x - b.x) <= eps and math.abs(a.y - b.y) <= eps
 
 // A grid point as a continuous one.  Exact for every coordinate below
 // 2 to the 53rd.
