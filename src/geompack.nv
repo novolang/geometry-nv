@@ -460,21 +460,18 @@ fn record(var shelves: [GeomShelf], var placed: [GeomPlacement], at: GeomPlaceme
         list.push(shelves, GeomShelf { y: at.rect.min.y, height: h, used: w })
 
 // The indices of `keys`, largest key first, with equal keys kept in
-// their original order.  The comparison breaks every tie by index, so
-// the order is total and the same on every run, although `list.sort_by`
-// itself promises no stability.
+// their original order.  Each pair holds a key and its index negated,
+// so the ascending sort puts equal keys in descending index order and
+// reading the pairs from the end gives the answer.
 fn order_desc(keys: [Int]) -> [Int]
-    var idx: [Int] = []
+    var pairs: [(Int, Int)] = []
     for i in 0..list.len(keys)
-        list.push(idx, i)
-    list.sort_by(idx, (a, b) => rank(keys, a, b))
+        list.push(pairs, (keys[i], 0 - i))
+    list.sort(pairs)
+    var idx: [Int] = []
+    var k = list.len(pairs)
+    while k > 0
+        k = k - 1
+        let (_, neg) = pairs[k]
+        list.push(idx, 0 - neg)
     idx
-
-// Negative when index `a` goes before index `b`: the larger key first,
-// and the smaller index first between equal keys.
-fn rank(keys: [Int], a: Int, b: Int) -> Int
-    if keys[a] > keys[b]
-        return 0 - 1
-    if keys[a] < keys[b]
-        return 1
-    a - b
