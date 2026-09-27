@@ -1,0 +1,135 @@
+// geomtrig.nv — the functions that take a square root or an angle:
+// lengths, distances, unit vectors and rotations.
+//
+// Each one calls a function of `std.math` that the C maths library
+// provides: `sqrt`, `sin`, `cos` or `atan2`.  A build for a
+// microcontroller without a floating-point unit would have to link
+// that library, which is why these are kept apart from `geompoint` and
+// `geomxform`.  On a device, `geompoint.length_sq` and
+// `geompoint.distance_sq` answer every comparison, and a rotation whose
+// sine and cosine are known ahead of time is `geomxform.of_matrix`.
+//
+// Angles are in radians, measured from positive x toward positive y.
+// Whether that looks clockwise depends on which way the caller's y
+// axis points: on a screen, where y grows down, it does; on a plot it
+// does not.
+
+use std.math
+use geompoint
+use geomxform
+
+// How long `v` is.
+//
+// ```novo
+// use geomtrig
+// use geompoint
+//
+// fn main() [io]
+//     println("${geomtrig.length(geompoint.vecf(3.0, 4.0))}")
+// ```
+pub fn length(v: GeomVecF) -> Float
+    math.sqrt(geompoint.length_sq(v))
+
+// `v` scaled to length 1.
+//
+// The zero vector has no direction, and normalizing it answers the zero
+// vector rather than one whose components are not numbers.  Its length
+// is then 0.0, so the mistake stays visible downstream.
+//
+// ```novo
+// use geomtrig
+// use geompoint
+//
+// fn main() [io]
+//     println("${geomtrig.normalize(geompoint.vecf(3.0, 4.0)).dx}")
+// ```
+pub fn normalize(v: GeomVecF) -> GeomVecF
+    let len = length(v)
+    if len == 0.0
+        return geompoint.zero_vec()
+    geompoint.vecf(v.dx / len, v.dy / len)
+
+// How far apart two points are.
+//
+// ```novo
+// use geomtrig
+// use geompoint
+//
+// fn main() [io]
+//     println("${geomtrig.distance(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0))}")
+// ```
+pub fn distance(a: GeomPointF, b: GeomPointF) -> Float
+    math.sqrt(geompoint.distance_sq(a, b))
+
+// The angle `v` points in, in radians, in `(-pi, pi]`.
+//
+// This is the two-argument arctangent of `v.dy` and `v.dx`.  The zero
+// vector answers 0.0, and a vector along negative x answers pi rather
+// than -pi.
+//
+// ```novo
+// use geomtrig
+// use geompoint
+//
+// fn main() [io]
+//     println("${geomtrig.angle_of(geompoint.vecf(0.0, 1.0))}")
+// ```
+pub fn angle_of(v: GeomVecF) -> Float
+    if v.dx == 0.0 and v.dy == 0.0
+        return 0.0
+    let a = math.atan2(v.dy, v.dx)
+    if a <= 0.0 - math.pi()
+        return math.pi()
+    a
+
+// The unit vector pointing at `radians`.
+//
+// ```novo
+// use geomtrig
+//
+// fn main() [io]
+//     println("${geomtrig.from_angle(0.0).dx}")
+// ```
+pub fn from_angle(radians: Float) -> GeomVecF
+    geompoint.vecf(math.cos(radians), math.sin(radians))
+
+// A rotation about the origin by `radians`, from positive x toward
+// positive y.
+//
+// ```novo
+// use geomtrig
+//
+// fn main() [io]
+//     println("${geomtrig.rotation(0.0).a}")
+// ```
+pub fn rotation(radians: Float) -> GeomXform
+    let c = math.cos(radians)
+    let s = math.sin(radians)
+    geomxform.of_matrix(c, s, 0.0 - s, c, 0.0, 0.0)
+
+// A rotation about `pivot` rather than the origin.  `pivot` stays where
+// it is.
+//
+// ```novo
+// use geomtrig
+// use geomxform
+// use geompoint
+//
+// fn main() [io]
+//     let t = geomtrig.rotation_about(1.0, geompoint.ptf(5.0, 5.0))
+//     println("${geomxform.apply_point(t, geompoint.ptf(5.0, 5.0)).x}")
+// ```
+pub fn rotation_about(radians: Float, pivot: GeomPointF) -> GeomXform
+    geomxform.about(rotation(radians), pivot)
+
+// `t` followed by a rotation about the origin.
+//
+// ```novo
+// use geomtrig
+// use geomxform
+//
+// fn main() [io]
+//     println("${geomtrig.rotated(geomxform.identity(), 0.0).a}")
+// ```
+pub fn rotated(t: GeomXform, radians: Float) -> GeomXform
+    geomxform.compose(t, rotation(radians))

@@ -1,44 +1,28 @@
 // geompoint.nv — points, vectors and sizes, in a Float flavour and an
-// Int flavour, as UNBOXED values.
+// Int flavour, as unboxed values.
 //
-// WHY TWO FLAVOURS AND NOT ONE GENERIC.  `GeomPoint<T>` would be one
-// declaration and no code: a generic function whose return type applies
-// a generic head is not emitted for a call from another module on this
-// toolchain, and a library is nothing but cross-module calls.  So the
-// two flavours are written out.  The division earns its keep anyway —
-// a Float point is a position in a continuous space and an Int point is
-// a pixel, and the conversions between them (`to_int_floor`,
-// `to_int_round`) are the places where that difference is decided ON
-// PURPOSE rather than by whichever cast the caller reached for.
+// There are two flavours rather than one generic `GeomPoint<T>`,
+// because a generic function whose return type applies a generic head
+// is not emitted for a call from another module on this toolchain, and
+// a library is nothing but those calls.  The division also matches a
+// real difference.  A Float point is a position in a continuous space
+// and an Int point is a pixel.  `to_int_floor` and `to_int_round` are
+// the places where a position becomes a pixel.
 //
-// WHY `@value`.  These are the types a drawing loop makes a hundred
-// thousand of.  `@value` lays them out with true field widths, passes
-// them in registers, and stores a `[GeomPointF]` as ONE flat buffer
-// with no per-element cell and no per-element reference count
-// (SPEC §14.6).  That is what makes the device claim in
-// `tests/embedded_probe.nv` possible.
+// Every type here is `@value` (SPEC section 14).  It is laid out with
+// true field widths and passed in registers, and a `[GeomPointF]` is
+// one flat buffer with no per-element cell and no per-element reference
+// count (SPEC section 14.6).  A `@value` struct may also sit in an
+// optional, a `Result` or a boxed struct's field, but each of those
+// positions boxes a copy and so allocates (SPEC section 14.5).  No
+// function in this module or in `geomrect` and `geomxform` answers one
+// of those shapes.  Where an answer can be absent, the value carries
+// it: an empty rectangle, a placement whose `ok` is false.
 //
-// WHAT `@value` COSTS, because it shapes every signature in this
-// package (SPEC §14.5).  An unboxed struct may be a local, a parameter,
-// a return, a field of another `@value` struct, and an element of a
-// list — and nothing else.  It may not be an optional payload, a
-// `Result` payload, a tuple element, an enum payload, or a field of a
-// boxed struct.  So:
-//
-//   - no function here returns `?GeomPointF` or
-//     `Result<GeomRectF, GeomFault>`.  Where an answer can be absent,
-//     the VALUE carries the answer — an empty rectangle, a placement
-//     with `ok` false — and a companion predicate asks.
-//   - `GeomPoly` and `GeomBin` are BOXED, and they hold their unboxed
-//     parts in lists (`[GeomPointF]`, `[GeomShelf]`), which is a
-//     supported position.  They could not hold one as a plain field.
-//   - a consumer that wants one of these inside an enum payload — a
-//     drawing op, an SVG node — carries the numbers instead and
-//     rebuilds the struct.  svg-nv's `SvgTransform` is that bridge
-//     written once.
-//
-// NO EFFECTS, and there is nothing to declare: every function is an
-// expression over its arguments.
+// Every function here is `@tier(embedded)`: plain arithmetic on the
+// arguments, with no allocation and no call into the C maths library.
+// The functions that need a square root or a trigonometric function
+// are in `geomtrig`, and the text renderings are in `geomtext`.
 
 // A position in continuous 2-D space.
 //
@@ -53,11 +37,9 @@ pub @value
 struct GeomPointF
     // Distance along x, increasing right.
     x: Float
-    // Distance along y.  THE DIRECTION IS THE CALLER'S: this package
-    // never assumes y grows down (a screen) or up (a plot), and every
-    // function here works either way.  The two consumers disagree —
-    // svg-nv's y grows down, plot-nv's data space grows up — and a
-    // `GeomXform` between them is what reconciles them.
+    // Distance along y.  The direction is the caller's choice: nothing
+    // here assumes that y grows down, as on a screen, or up, as on a
+    // plot.  A `GeomXform` between the two is what reconciles them.
     y: Float
 
 // A position on an integer grid: a pixel, a cell, a texel.
@@ -73,25 +55,22 @@ pub @value
 struct GeomPointI
     // Column, increasing right.
     x: Int
-    // Row.  Same caller's-choice rule as `GeomPointF.y`.
+    // Row, in the direction the caller chooses, as for `GeomPointF.y`.
     y: Int
 
 // A displacement in continuous 2-D space.
 //
-// A SEPARATE TYPE FROM `GeomPointF` on purpose, and it is the one place
-// this package is stricter than the arithmetic requires.  A point plus
-// a point is meaningless and a point minus a point is a vector; making
-// them one type makes both spellable.  And a rotation applied to a
-// position is not the same operation as a rotation applied to a
-// displacement — `geomxform.apply_point` translates, `apply_vec` does
-// not — which is a bug the type separation catches at the call.
+// A vector is a separate type from a point.  A point minus a point is a
+// vector, and a point plus a point means nothing.  An affine transform
+// also treats the two differently: `geomxform.apply_point` applies the
+// translation and `geomxform.apply_vec` does not.
 //
 // ```novo
 // use geompoint
 //
 // fn main() [io]
 //     let v = geompoint.vecf(3.0, 4.0)
-//     println("${geompoint.length(v)}")
+//     println("${geompoint.length_sq(v)}")
 // ```
 pub @value
 struct GeomVecF
@@ -118,11 +97,9 @@ struct GeomVecI
 
 // An extent: how wide and how tall, with no position.
 //
-// Negative extents are REPRESENTABLE and mean an empty size;
+// A negative extent is allowed and means an empty size.
 // `size_is_empty` is the question, and `geomrect` treats a rectangle
-// built from one as empty.  Refusing them at construction would cost
-// every caller a `Result` for a case the algebra already answers — a
-// clipped rectangle is routinely empty, and that is not an error.
+// built from an empty size as empty.
 //
 // ```novo
 // use geompoint
@@ -162,8 +139,9 @@ struct GeomSizeI
 // fn main() [io]
 //     println("${geompoint.ptf(1.5, 2.5).y}")
 // ```
-pub fn ptf(x: Float, y: Float) -> GeomPointF
-    todo("geometry-nv.geompoint.ptf")
+pub @tier(embedded)
+fn ptf(x: Float, y: Float) -> GeomPointF
+    GeomPointF { x: x, y: y }
 
 // A grid point from its coordinates.
 //
@@ -173,8 +151,9 @@ pub fn ptf(x: Float, y: Float) -> GeomPointF
 // fn main() [io]
 //     println("${geompoint.pti(1, 2).y}")
 // ```
-pub fn pti(x: Int, y: Int) -> GeomPointI
-    todo("geometry-nv.geompoint.pti")
+pub @tier(embedded)
+fn pti(x: Int, y: Int) -> GeomPointI
+    GeomPointI { x: x, y: y }
 
 // A vector from its components.
 //
@@ -184,8 +163,9 @@ pub fn pti(x: Int, y: Int) -> GeomPointI
 // fn main() [io]
 //     println("${geompoint.vecf(1.0, 0.0).dx}")
 // ```
-pub fn vecf(dx: Float, dy: Float) -> GeomVecF
-    todo("geometry-nv.geompoint.vecf")
+pub @tier(embedded)
+fn vecf(dx: Float, dy: Float) -> GeomVecF
+    GeomVecF { dx: dx, dy: dy }
 
 // A grid vector from its components.
 //
@@ -195,8 +175,9 @@ pub fn vecf(dx: Float, dy: Float) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.veci(1, 0).dx}")
 // ```
-pub fn veci(dx: Int, dy: Int) -> GeomVecI
-    todo("geometry-nv.geompoint.veci")
+pub @tier(embedded)
+fn veci(dx: Int, dy: Int) -> GeomVecI
+    GeomVecI { dx: dx, dy: dy }
 
 // A size from its extents.
 //
@@ -206,8 +187,9 @@ pub fn veci(dx: Int, dy: Int) -> GeomVecI
 // fn main() [io]
 //     println("${geompoint.sizef(2.0, 3.0).w}")
 // ```
-pub fn sizef(w: Float, h: Float) -> GeomSizeF
-    todo("geometry-nv.geompoint.sizef")
+pub @tier(embedded)
+fn sizef(w: Float, h: Float) -> GeomSizeF
+    GeomSizeF { w: w, h: h }
 
 // A whole-unit size from its extents.
 //
@@ -217,8 +199,9 @@ pub fn sizef(w: Float, h: Float) -> GeomSizeF
 // fn main() [io]
 //     println("${geompoint.sizei(2, 3).w}")
 // ```
-pub fn sizei(w: Int, h: Int) -> GeomSizeI
-    todo("geometry-nv.geompoint.sizei")
+pub @tier(embedded)
+fn sizei(w: Int, h: Int) -> GeomSizeI
+    GeomSizeI { w: w, h: h }
 
 // The point at `(0, 0)`.
 //
@@ -228,8 +211,9 @@ pub fn sizei(w: Int, h: Int) -> GeomSizeI
 // fn main() [io]
 //     println("${geompoint.origin().x}")
 // ```
-pub fn origin() -> GeomPointF
-    todo("geometry-nv.geompoint.origin")
+pub @tier(embedded)
+fn origin() -> GeomPointF
+    GeomPointF { x: 0.0, y: 0.0 }
 
 // The vector `(0, 0)`.
 //
@@ -239,8 +223,9 @@ pub fn origin() -> GeomPointF
 // fn main() [io]
 //     println("${geompoint.zero_vec().dx}")
 // ```
-pub fn zero_vec() -> GeomVecF
-    todo("geometry-nv.geompoint.zero_vec")
+pub @tier(embedded)
+fn zero_vec() -> GeomVecF
+    GeomVecF { dx: 0.0, dy: 0.0 }
 
 // The point `p` displaced by `v`.
 //
@@ -251,8 +236,9 @@ pub fn zero_vec() -> GeomVecF
 //     let p = geompoint.offset(geompoint.ptf(1.0, 1.0), geompoint.vecf(2.0, 3.0))
 //     println("${p.x}")
 // ```
-pub fn offset(p: GeomPointF, v: GeomVecF) -> GeomPointF
-    todo("geometry-nv.geompoint.offset")
+pub @tier(embedded)
+fn offset(p: GeomPointF, v: GeomVecF) -> GeomPointF
+    GeomPointF { x: p.x + v.dx, y: p.y + v.dy }
 
 // The displacement that takes `from` to `to`.
 //
@@ -263,8 +249,9 @@ pub fn offset(p: GeomPointF, v: GeomVecF) -> GeomPointF
 //     let v = geompoint.between(geompoint.ptf(1.0, 1.0), geompoint.ptf(4.0, 5.0))
 //     println("${v.dy}")
 // ```
-pub fn between(from: GeomPointF, to: GeomPointF) -> GeomVecF
-    todo("geometry-nv.geompoint.between")
+pub @tier(embedded)
+fn between(from: GeomPointF, to: GeomPointF) -> GeomVecF
+    GeomVecF { dx: to.x - from.x, dy: to.y - from.y }
 
 // Two vectors added.
 //
@@ -274,8 +261,9 @@ pub fn between(from: GeomPointF, to: GeomPointF) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.add(geompoint.vecf(1.0, 2.0), geompoint.vecf(3.0, 4.0)).dx}")
 // ```
-pub fn add(a: GeomVecF, b: GeomVecF) -> GeomVecF
-    todo("geometry-nv.geompoint.add")
+pub @tier(embedded)
+fn add(a: GeomVecF, b: GeomVecF) -> GeomVecF
+    GeomVecF { dx: a.dx + b.dx, dy: a.dy + b.dy }
 
 // `a` minus `b`.
 //
@@ -285,8 +273,9 @@ pub fn add(a: GeomVecF, b: GeomVecF) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.sub(geompoint.vecf(3.0, 4.0), geompoint.vecf(1.0, 2.0)).dx}")
 // ```
-pub fn sub(a: GeomVecF, b: GeomVecF) -> GeomVecF
-    todo("geometry-nv.geompoint.sub")
+pub @tier(embedded)
+fn sub(a: GeomVecF, b: GeomVecF) -> GeomVecF
+    GeomVecF { dx: a.dx - b.dx, dy: a.dy - b.dy }
 
 // `v` scaled by `k`.
 //
@@ -296,8 +285,9 @@ pub fn sub(a: GeomVecF, b: GeomVecF) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.scale(geompoint.vecf(1.0, 2.0), 3.0).dy}")
 // ```
-pub fn scale(v: GeomVecF, k: Float) -> GeomVecF
-    todo("geometry-nv.geompoint.scale")
+pub @tier(embedded)
+fn scale(v: GeomVecF, k: Float) -> GeomVecF
+    GeomVecF { dx: v.dx * k, dy: v.dy * k }
 
 // `v` turned the other way.
 //
@@ -307,13 +297,13 @@ pub fn scale(v: GeomVecF, k: Float) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.negate(geompoint.vecf(1.0, 2.0)).dx}")
 // ```
-pub fn negate(v: GeomVecF) -> GeomVecF
-    todo("geometry-nv.geompoint.negate")
+pub @tier(embedded)
+fn negate(v: GeomVecF) -> GeomVecF
+    GeomVecF { dx: 0.0 - v.dx, dy: 0.0 - v.dy }
 
 // The dot product: `a.dx * b.dx + a.dy * b.dy`.
 //
-// Zero exactly when the two are perpendicular, which is how a
-// containment test asks which side of an edge a point is on.
+// It is zero exactly when the two vectors are perpendicular.
 //
 // ```novo
 // use geompoint
@@ -321,15 +311,16 @@ pub fn negate(v: GeomVecF) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.dot(geompoint.vecf(1.0, 0.0), geompoint.vecf(0.0, 1.0))}")
 // ```
-pub fn dot(a: GeomVecF, b: GeomVecF) -> Float
-    todo("geometry-nv.geompoint.dot")
+pub @tier(embedded)
+fn dot(a: GeomVecF, b: GeomVecF) -> Float
+    a.dx * b.dx + a.dy * b.dy
 
 // The 2-D cross product: `a.dx * b.dy - a.dy * b.dx`.
 //
-// A scalar rather than a vector, because in two dimensions the result
-// only ever points out of the plane.  Its SIGN is the useful part: it
-// says whether `b` turns left or right of `a`, which is what
-// `geompoly.winding` and the convexity test are counting.
+// It is a scalar, because in two dimensions the product points out of
+// the plane.  Its sign says whether `b` turns toward positive y from
+// `a` (positive) or away from it (negative).  `geompoly.winding` and
+// `geompoly.is_convex` read that sign.
 //
 // ```novo
 // use geompoint
@@ -337,25 +328,15 @@ pub fn dot(a: GeomVecF, b: GeomVecF) -> Float
 // fn main() [io]
 //     println("${geompoint.cross(geompoint.vecf(1.0, 0.0), geompoint.vecf(0.0, 1.0))}")
 // ```
-pub fn cross(a: GeomVecF, b: GeomVecF) -> Float
-    todo("geometry-nv.geompoint.cross")
+pub @tier(embedded)
+fn cross(a: GeomVecF, b: GeomVecF) -> Float
+    a.dx * b.dy - a.dy * b.dx
 
-// How long `v` is.
+// How long `v` is, squared.  No square root is taken.
 //
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println("${geompoint.length(geompoint.vecf(3.0, 4.0))}")
-// ```
-pub fn length(v: GeomVecF) -> Float
-    todo("geometry-nv.geompoint.length")
-
-// How long `v` is, SQUARED — no square root taken.
-//
-// The one to compare with: sorting by distance, testing a radius or
-// finding a nearest point never needs the root, and on a device the
-// root is the expensive call in the loop.
+// This is the form to compare with.  Sorting by distance, testing a
+// radius and finding a nearest point never need the root.
+// `geomtrig.length` takes it.
 //
 // ```novo
 // use geompoint
@@ -363,26 +344,11 @@ pub fn length(v: GeomVecF) -> Float
 // fn main() [io]
 //     println("${geompoint.length_sq(geompoint.vecf(3.0, 4.0))}")
 // ```
-pub fn length_sq(v: GeomVecF) -> Float
-    todo("geometry-nv.geompoint.length_sq")
+pub @tier(embedded)
+fn length_sq(v: GeomVecF) -> Float
+    v.dx * v.dx + v.dy * v.dy
 
-// `v` scaled to length 1.
-//
-// The zero vector has no direction, and normalising it returns THE ZERO
-// VECTOR rather than a NaN one — a value the caller can keep computing
-// with, whose `length` is 0.0, so the mistake stays visible instead of
-// poisoning everything downstream.
-//
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println("${geompoint.normalize(geompoint.vecf(3.0, 4.0)).dx}")
-// ```
-pub fn normalize(v: GeomVecF) -> GeomVecF
-    todo("geometry-nv.geompoint.normalize")
-
-// `v` turned a quarter turn, toward positive y.
+// `v` turned a quarter turn, from positive x toward positive y.
 //
 // ```novo
 // use geompoint
@@ -390,46 +356,11 @@ pub fn normalize(v: GeomVecF) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.perpendicular(geompoint.vecf(1.0, 0.0)).dy}")
 // ```
-pub fn perpendicular(v: GeomVecF) -> GeomVecF
-    todo("geometry-nv.geompoint.perpendicular")
+pub @tier(embedded)
+fn perpendicular(v: GeomVecF) -> GeomVecF
+    GeomVecF { dx: 0.0 - v.dy, dy: v.dx }
 
-// The angle `v` points in, in radians, measured from positive x.
-//
-// In `(-pi, pi]`, the two-argument arctangent's range.  The zero vector
-// answers 0.0.
-//
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println("${geompoint.angle_of(geompoint.vecf(1.0, 0.0))}")
-// ```
-pub fn angle_of(v: GeomVecF) -> Float
-    todo("geometry-nv.geompoint.angle_of")
-
-// The unit vector pointing at `radians`.
-//
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println("${geompoint.from_angle(0.0).dx}")
-// ```
-pub fn from_angle(radians: Float) -> GeomVecF
-    todo("geometry-nv.geompoint.from_angle")
-
-// How far apart two points are.
-//
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println("${geompoint.distance(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0))}")
-// ```
-pub fn distance(a: GeomPointF, b: GeomPointF) -> Float
-    todo("geometry-nv.geompoint.distance")
-
-// How far apart two points are, SQUARED.  The comparison form.
+// How far apart two points are, squared.  The comparison form.
 //
 // ```novo
 // use geompoint
@@ -437,15 +368,15 @@ pub fn distance(a: GeomPointF, b: GeomPointF) -> Float
 // fn main() [io]
 //     println("${geompoint.distance_sq(geompoint.ptf(0.0, 0.0), geompoint.ptf(3.0, 4.0))}")
 // ```
-pub fn distance_sq(a: GeomPointF, b: GeomPointF) -> Float
-    todo("geometry-nv.geompoint.distance_sq")
+pub @tier(embedded)
+fn distance_sq(a: GeomPointF, b: GeomPointF) -> Float
+    length_sq(between(a, b))
 
 // The point `t` of the way from `a` to `b`.
 //
-// `t` is NOT clamped: 0.0 is `a`, 1.0 is `b`, and 2.0 is as far past
-// `b` again.  Extrapolation is the useful half — an axis tick outside
-// the data range and a ray beyond its segment both want it — and a
-// caller who wants the clamp says so.
+// `t` is not clamped.  0.0 is `a`, 1.0 is `b`, and 2.0 is as far past
+// `b` again.  An axis tick outside the data range and a ray beyond its
+// segment both use values outside `0.0 ..= 1.0`.
 //
 // ```novo
 // use geompoint
@@ -453,8 +384,9 @@ pub fn distance_sq(a: GeomPointF, b: GeomPointF) -> Float
 // fn main() [io]
 //     println("${geompoint.lerp(geompoint.ptf(0.0, 0.0), geompoint.ptf(10.0, 0.0), 0.5).x}")
 // ```
-pub fn lerp(a: GeomPointF, b: GeomPointF, t: Float) -> GeomPointF
-    todo("geometry-nv.geompoint.lerp")
+pub @tier(embedded)
+fn lerp(a: GeomPointF, b: GeomPointF, t: Float) -> GeomPointF
+    GeomPointF { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
 
 // The point halfway between two points.
 //
@@ -464,14 +396,15 @@ pub fn lerp(a: GeomPointF, b: GeomPointF, t: Float) -> GeomPointF
 // fn main() [io]
 //     println("${geompoint.midpoint(geompoint.ptf(0.0, 0.0), geompoint.ptf(4.0, 0.0)).x}")
 // ```
-pub fn midpoint(a: GeomPointF, b: GeomPointF) -> GeomPointF
-    todo("geometry-nv.geompoint.midpoint")
+pub @tier(embedded)
+fn midpoint(a: GeomPointF, b: GeomPointF) -> GeomPointF
+    GeomPointF { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }
 
-// Whether two points are the same to within `eps`.
+// Whether two points differ by at most `eps` on each axis.
 //
-// The comparison operators reject a `@value` struct (SPEC §14.5), and
-// comparing two Floats for exact equality is the wrong question anyway.
-// This is the right one, and it puts the tolerance where it belongs.
+// The comparison operators reject a `@value` struct (SPEC section
+// 14.5), and exact equality of two Floats is rarely the right test.
+// This one takes the tolerance as an argument.
 //
 // ```novo
 // use geompoint
@@ -479,10 +412,18 @@ pub fn midpoint(a: GeomPointF, b: GeomPointF) -> GeomPointF
 // fn main() [io]
 //     println("${geompoint.near(geompoint.ptf(1.0, 1.0), geompoint.ptf(1.0, 1.0), 0.0001)}")
 // ```
-pub fn near(a: GeomPointF, b: GeomPointF, eps: Float) -> Bool
-    todo("geometry-nv.geompoint.near")
+pub @tier(embedded)
+fn near(a: GeomPointF, b: GeomPointF, eps: Float) -> Bool
+    within(a.x - b.x, eps) and within(a.y - b.y, eps)
 
-// A grid point as a continuous one.  Exact.
+// Whether `d` lies in `[-eps, eps]`.  Written with two comparisons, so
+// the device build needs no absolute-value call.
+@tier(embedded)
+fn within(d: Float, eps: Float) -> Bool
+    d <= eps and 0.0 - d <= eps
+
+// A grid point as a continuous one.  Exact for every coordinate below
+// 2 to the 53rd.
 //
 // ```novo
 // use geompoint
@@ -490,14 +431,16 @@ pub fn near(a: GeomPointF, b: GeomPointF, eps: Float) -> Bool
 // fn main() [io]
 //     println("${geompoint.to_float(geompoint.pti(3, 4)).x}")
 // ```
-pub fn to_float(p: GeomPointI) -> GeomPointF
-    todo("geometry-nv.geompoint.to_float")
+pub @tier(embedded)
+fn to_float(p: GeomPointI) -> GeomPointF
+    GeomPointF { x: p.x as Float, y: p.y as Float }
 
-// A continuous point on the grid, rounded DOWN in both axes.
+// A continuous point on the grid, rounded down on both axes.
 //
-// The pixel a position falls INSIDE — the rule a rasteriser wants, and
-// the one that stays monotonic across zero, which truncation toward
-// zero does not.
+// This is the pixel the position falls inside.  Rounding down stays
+// monotonic across zero, which truncation toward zero does not: -0.5
+// falls in pixel -1.  A coordinate that is not a number, or is outside
+// the range of `Int`, stops the program (SPEC section 13.3).
 //
 // ```novo
 // use geompoint
@@ -505,13 +448,15 @@ pub fn to_float(p: GeomPointI) -> GeomPointF
 // fn main() [io]
 //     println("${geompoint.to_int_floor(geompoint.ptf(0.0 - 0.5, 3.9)).x}")
 // ```
-pub fn to_int_floor(p: GeomPointF) -> GeomPointI
-    todo("geometry-nv.geompoint.to_int_floor")
+pub @tier(embedded)
+fn to_int_floor(p: GeomPointF) -> GeomPointI
+    GeomPointI { x: floor_int(p.x), y: floor_int(p.y) }
 
-// A continuous point on the grid, rounded to NEAREST, halves away from
-// zero.
+// A continuous point on the grid, rounded to the nearest whole number,
+// with halves rounded away from zero.
 //
-// The rule for placing a mark: the nearest pixel, not the one below.
+// This is the rule for placing a mark on the nearest pixel.  The same
+// range rule as `to_int_floor` applies.
 //
 // ```novo
 // use geompoint
@@ -519,8 +464,31 @@ pub fn to_int_floor(p: GeomPointF) -> GeomPointI
 // fn main() [io]
 //     println("${geompoint.to_int_round(geompoint.ptf(3.5, 3.4)).x}")
 // ```
-pub fn to_int_round(p: GeomPointF) -> GeomPointI
-    todo("geometry-nv.geompoint.to_int_round")
+pub @tier(embedded)
+fn to_int_round(p: GeomPointF) -> GeomPointI
+    GeomPointI { x: round_int(p.x), y: round_int(p.y) }
+
+// `x` rounded down to a whole number.  The cast truncates toward zero,
+// and a negative value with a fraction is then one too high.
+@tier(embedded)
+fn floor_int(x: Float) -> Int
+    let t = x as Int
+    if (t as Float) > x
+        return t - 1
+    t
+
+// `x` rounded to the nearest whole number, halves away from zero.  The
+// fraction `x - t` is exact, because `t` is `x` with its fraction
+// removed, so no half is misread by an addition that rounds.
+@tier(embedded)
+fn round_int(x: Float) -> Int
+    let t = x as Int
+    let frac = x - t as Float
+    if frac >= 0.5
+        return t + 1
+    if frac <= 0.0 - 0.5
+        return t - 1
+    t
 
 // A grid vector as a continuous one.
 //
@@ -530,8 +498,9 @@ pub fn to_int_round(p: GeomPointF) -> GeomPointI
 // fn main() [io]
 //     println("${geompoint.vec_to_float(geompoint.veci(3, 4)).dx}")
 // ```
-pub fn vec_to_float(v: GeomVecI) -> GeomVecF
-    todo("geometry-nv.geompoint.vec_to_float")
+pub @tier(embedded)
+fn vec_to_float(v: GeomVecI) -> GeomVecF
+    GeomVecF { dx: v.dx as Float, dy: v.dy as Float }
 
 // A grid size as a continuous one.
 //
@@ -541,8 +510,9 @@ pub fn vec_to_float(v: GeomVecI) -> GeomVecF
 // fn main() [io]
 //     println("${geompoint.size_to_float(geompoint.sizei(16, 16)).w}")
 // ```
-pub fn size_to_float(s: GeomSizeI) -> GeomSizeF
-    todo("geometry-nv.geompoint.size_to_float")
+pub @tier(embedded)
+fn size_to_float(s: GeomSizeI) -> GeomSizeF
+    GeomSizeF { w: s.w as Float, h: s.h as Float }
 
 // `w * h`, which is negative or zero for an empty size.
 //
@@ -552,8 +522,9 @@ pub fn size_to_float(s: GeomSizeI) -> GeomSizeF
 // fn main() [io]
 //     println("${geompoint.area_of(geompoint.sizef(3.0, 4.0))}")
 // ```
-pub fn area_of(s: GeomSizeF) -> Float
-    todo("geometry-nv.geompoint.area_of")
+pub @tier(embedded)
+fn area_of(s: GeomSizeF) -> Float
+    s.w * s.h
 
 // `w * h` in whole units.
 //
@@ -563,10 +534,11 @@ pub fn area_of(s: GeomSizeF) -> Float
 // fn main() [io]
 //     println("${geompoint.area_of_i(geompoint.sizei(3, 4))}")
 // ```
-pub fn area_of_i(s: GeomSizeI) -> Int
-    todo("geometry-nv.geompoint.area_of_i")
+pub @tier(embedded)
+fn area_of_i(s: GeomSizeI) -> Int
+    s.w * s.h
 
-// Whether a size encloses nothing: either extent zero or negative.
+// Whether a size encloses nothing: either extent is zero or negative.
 //
 // ```novo
 // use geompoint
@@ -574,8 +546,9 @@ pub fn area_of_i(s: GeomSizeI) -> Int
 // fn main() [io]
 //     println("${geompoint.size_is_empty(geompoint.sizef(0.0, 5.0))}")
 // ```
-pub fn size_is_empty(s: GeomSizeF) -> Bool
-    todo("geometry-nv.geompoint.size_is_empty")
+pub @tier(embedded)
+fn size_is_empty(s: GeomSizeF) -> Bool
+    not (s.w > 0.0 and s.h > 0.0)
 
 // Whether a whole-unit size encloses nothing.
 //
@@ -585,19 +558,6 @@ pub fn size_is_empty(s: GeomSizeF) -> Bool
 // fn main() [io]
 //     println("${geompoint.size_is_empty_i(geompoint.sizei(0, 5))}")
 // ```
-pub fn size_is_empty_i(s: GeomSizeI) -> Bool
-    todo("geometry-nv.geompoint.size_is_empty_i")
-
-// A point written as `"(x, y)"`.
-//
-// String interpolation of a whole `@value` struct is rejected
-// (SPEC §14.5), so the package that owns the type owns its rendering.
-//
-// ```novo
-// use geompoint
-//
-// fn main() [io]
-//     println(geompoint.format(geompoint.ptf(1.5, 2.0)))
-// ```
-pub fn format(p: GeomPointF) -> Str
-    todo("geometry-nv.geompoint.format")
+pub @tier(embedded)
+fn size_is_empty_i(s: GeomSizeI) -> Bool
+    s.w <= 0 or s.h <= 0

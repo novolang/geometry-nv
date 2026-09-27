@@ -1,0 +1,52 @@
+// geomtext.nv — points, rectangles and transforms written out as text.
+//
+// String interpolation of a whole `@value` struct is rejected (SPEC
+// section 14.5), so the package that owns the types owns their text
+// form.  Every number is written the way `"${x}"` writes a Float: the
+// shortest decimal that reads back as the same value, with no `.0` on
+// a whole number.  Building text allocates, which is why these
+// functions are kept apart from the modules a device build uses.
+
+use geompoint
+use geomrect
+use geomxform
+
+// A point written as `(x, y)`.
+//
+// ```novo
+// use geomtext
+// use geompoint
+//
+// fn main() [io]
+//     println(geomtext.format_point(geompoint.ptf(1.5, 2.0)))
+// ```
+pub fn format_point(p: GeomPointF) -> Str
+    "(${p.x}, ${p.y})"
+
+// A rectangle written as `(x, y, w, h)`: its low corner, its width and
+// its height.
+//
+// ```novo
+// use geomtext
+// use geomrect
+//
+// fn main() [io]
+//     println(geomtext.format_rect(geomrect.of_xywh(0.0, 0.0, 10.0, 20.0)))
+// ```
+pub fn format_rect(r: GeomRectF) -> Str
+    "(${r.min.x}, ${r.min.y}, ${geomrect.width(r)}, ${geomrect.height(r)})"
+
+// A transform written as SVG's `matrix(a b c d e f)`.
+//
+// This is the spelling of a `transform` attribute in SVG 1.1 section
+// 7.6.
+//
+// ```novo
+// use geomtext
+// use geomxform
+//
+// fn main() [io]
+//     println(geomtext.format_matrix(geomxform.identity()))
+// ```
+pub fn format_matrix(t: GeomXform) -> Str
+    "matrix(${t.a} ${t.b} ${t.c} ${t.d} ${t.e} ${t.f})"
